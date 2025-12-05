@@ -1,0 +1,16 @@
+[db]
+username = "root"
+password = "root"
+host = "10.80.5.25"
+port = "27017"
+database = "facerecapi"
+auth_source = "admin"
+[face]
+threshold = 0.4
+[gpu]
+gpu_id = 0
+[threading]
+max_workers = 2
+[frontlogin]
+username = "admin"
+password = "admin"

@@ -1,0 +1,19 @@
+*.pyc
+__pycache__
+*.log
+*.db
+*.dat
+*.onnx
+# 文件名中包含copy的python都不要上传到git
+*copy*.py
+# 忽略所有.idea目录
+.idea/
+# 文件名中包含bak的python都不要上传到git
+*bak*.py
+# 忽略所有.vscode目录
+.vscode/
+# detections目录下的文件不要上传到git
+detections/*
+person_photos/*
+*.md
+tmp/

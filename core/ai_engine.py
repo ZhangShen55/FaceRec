@@ -1,0 +1,222 @@
+# app/ai_engine.py
+from typing import Optional, Tuple
+from pathlib import Path
+import asyncio
+import os
+import cv2
+import dlib
+import numpy as np
+import fastdeploy as fd
+from concurrent.futures import ProcessPoolExecutor
+from app.core.config import settings
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+_SHAPE_PREDICTOR_PATH = str(BASE_DIR / 'shape_predictor_68_face_landmarks.dat')
+
+# embading模型全局加载加载
+GPU_ID = int(settings.gpu.gpu_id)  # 这里默认使用第0卡
+option = fd.RuntimeOption()
+option.use_gpu(GPU_ID)
+embedding_model = fd.vision.faceid.ArcFace(str(BASE_DIR / 'ms1mv3_arcface_r100.onnx'),
+                                           runtime_option=option)
+
+# 1. 定义全局变量 (默认为 None，等待 main.py 启动时注入)
+GLOBAL_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
+
+# ---- 子进程定义 ----
+_mp_detector = None
+_mp_predictor = None
+
+def _init_dlib_worker():
+    """
+    子进程的初始化函数。
+    当 ProcessPoolExecutor 创建一个新的子进程时，会立刻运行这个函数。
+    在这里加载模型，确保每个进程有一份独立的模型，互不干扰。
+    """
+    global _mp_detector, _mp_predictor
+    print(f"[Worker PID: {os.getpid()}] 正在加载 Dlib 模型...")
+    try:
+        _mp_detector = dlib.get_frontal_face_detector()
+        _mp_predictor = dlib.shape_predictor(_SHAPE_PREDICTOR_PATH)
+        print(f"[Worker PID: {os.getpid()}] Dlib 模型加载完成")
+    except Exception as e:
+        print(f"[Worker PID: {os.getpid()}] 模型加载失败: {e}")
+
+
+def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+    """
+    真实的dlib计算的函数的，运行在子进程中。
+    """
+    # 使用子进程局部的模型
+    global _mp_detector, _mp_predictor
+    if _mp_detector is None or _mp_predictor is None:
+        return None, None
+
+    # 转灰度cpu计算
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # 1. 检测人脸cpu计算
+    faces = _mp_detector(gray, 1)
+    if not faces:
+        return None, None
+
+    # 选择最大人脸
+    face = max(faces, key=lambda r: r.width() * r.height())
+    (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
+
+    # 2. 关键点
+    shape = _mp_predictor(gray, face)
+
+    # 3. 对齐辅助函数 (假设这些函数您已经定义好了，并且没有引用全局状态)
+    # 注意：_shape_to_np, _five_from_68, _align_by_5pts 必须是纯函数
+    # 如果它们依赖外部变量，也需要搬进来或者作为参数传进来
+    lm68 = _shape_to_np(shape)
+    lm5 = _five_from_68(lm68)
+    aligned = _align_by_5pts(image, lm5, (112, 112))
+
+    bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
+
+    return aligned, bbox
+
+
+async def detect_and_extract_face(image: np.ndarray):
+    """
+    主程序调用的入口。
+    它会检查 GLOBAL_PROCESS_POOL 是否已被 main.py 初始化。
+    """
+    loop = asyncio.get_running_loop()
+
+    if GLOBAL_PROCESS_POOL is None:
+        # 如果池子没初始化（比如直接运行此脚本测试），降级为同步或报错
+        raise RuntimeError("全局进程池未初始化，请检查main.py是否正确启动")
+
+    try:
+        # 提交给进程池
+        return await loop.run_in_executor(
+            GLOBAL_PROCESS_POOL,
+            _dlib_task_implementation,
+            image
+        )
+    except Exception as e:
+        print(f"Process Pool Error: {e}")
+        return None, None
+
+# 创建全程的进程池
+# dlib_process_pool = ProcessPoolExecutor(
+#     max_workers=8,
+#     initializer=_init_dlib_worker
+# )
+
+
+# async def detect_and_extract_face(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+#     """
+#     主入口：将任务提交给进程池
+#     """
+#     loop = asyncio.get_running_loop()
+#     try:
+#         # run_in_executor 同样适用于 ProcessPoolExecutor
+#         # 注意：这里的 image 会被 pickle 序列化并通过 IPC 发送给子进程
+#         # 返回的 aligned 和 bbox 也会被序列化发回来
+#         result = await loop.run_in_executor(
+#             dlib_process_pool,
+#             _dlib_task_implementation,
+#             image
+#         )
+#         return result
+#     except Exception as e:
+#         print(f"Dlib Process Error: {e}")
+#         return None, None
+
+
+
+
+# ArcFace 常用 5点模板（112x112）
+_ARCFACE_5PTS = np.array([
+    [38.2946, 51.6963],  # 左眼
+    [73.5318, 51.5014],  # 右眼
+    [56.0252, 71.7366],  # 鼻子
+    [41.5493, 92.3655],  # 左嘴角
+    [70.7299, 92.2041],  # 右嘴角
+], dtype=np.float32)
+
+
+def _shape_to_np(shape: dlib.full_object_detection) -> np.ndarray:
+    return np.array([(shape.part(i).x, shape.part(i).y) for i in range(68)], dtype=np.float32)
+
+def _five_from_68(landmarks68: np.ndarray) -> np.ndarray:
+    # 68点里：眼睛 36-41, 42-47；鼻尖 30；嘴角 48, 54
+    left_eye = landmarks68[36:42].mean(axis=0)
+    right_eye = landmarks68[42:48].mean(axis=0)
+    nose = landmarks68[30]
+    left_mouth = landmarks68[48]
+    right_mouth = landmarks68[54]
+    return np.stack([left_eye, right_eye, nose, left_mouth, right_mouth]).astype(np.float32)
+
+def _align_by_5pts(img: np.ndarray, pts: np.ndarray, size: Tuple[int,int]=(112,112)) -> np.ndarray:
+    dst = _ARCFACE_5PTS
+    M = cv2.estimateAffinePartial2D(pts, dst, method=cv2.LMEDS)[0]
+    aligned = cv2.warpAffine(img, M, size, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    return aligned
+
+
+# 异步化处理：利用 `asyncio.to_thread()` 异步执行同步函数
+# async def detect_and_extract_face(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+#     """
+#     异步检测并裁剪出最大的人脸，并返回裁剪后的人脸图像和人脸坐标（bbox）。
+#     :param image: OpenCV格式的图像 (BGR)
+#     :return: (aligned_face, bbox) 如果未检测到人脸返回 (None, None)
+#     """
+#     return await asyncio.to_thread(detect_and_extract_face_sync, image)
+
+"""
+def detect_and_extract_face_sync(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+    # 同步的检测和裁剪最大人脸的方法
+
+    # 预处理：转灰度图 (OpenCV 是线程安全的，不需要加锁，放在锁外面提高效率)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # ================= 关键修改开始 =================
+    # 使用锁包围所有 Dlib 的操作
+    with _DLIB_LOCK:
+        # 1. 人脸检测
+        faces = detector(gray, 1)
+        if not faces:
+            return None, None
+        # 拿最大人脸
+        face = max(faces, key=lambda r: r.width() * r.height())
+        (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
+        # 2. 关键点预测 (这个步骤非常容易崩，必须锁住)
+        shape = predictor(gray, face)
+        # 3. 后续计算 (如果 _shape_to_np 涉及 dlib 对象操作，也要锁住)
+        lm68 = _shape_to_np(shape)
+    # ================= 关键修改结束 =================
+    # 这里的计算是纯 Numpy/Python，不需要锁，可以释放锁让其他线程进来
+    start_y = max(0, int(y - h * 0.4))
+    lm5 = _five_from_68(lm68)
+    aligned = _align_by_5pts(image, lm5, (112, 112))
+
+    bbox = {"x": int(x), "y": int(start_y), "w": int(w), "h": int(h)}
+    return aligned, bbox
+"""
+
+# 异步获取特征向量
+async def get_embedding(face_aligned: np.ndarray) -> np.ndarray:
+    """
+    异步提取 512d 单位化向量（float32, L2norm==1）
+    :param face_aligned: 对齐后的 112x112 人脸图像
+    :return: 归一化后的 512维特征向量
+    """
+    return await asyncio.to_thread(get_embedding_sync, face_aligned)
+
+def get_embedding_sync(face_aligned: np.ndarray) -> np.ndarray:
+    """同步获取特征向量的方法"""
+    result = embedding_model.predict(face_aligned)
+    emb = np.asarray(result.embedding, dtype=np.float32)
+    # 再做一次归一化
+    n = np.linalg.norm(emb) + 1e-12
+    emb = emb / n
+    return emb
+
+
+
+
