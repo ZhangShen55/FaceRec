@@ -1,6 +1,7 @@
 import uuid
 import numpy as np
 from pathlib import Path
+from typing import List
 from bson.binary import Binary
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -11,18 +12,19 @@ from app.curd import person
 from app.utils.image_loader import get_photo_mat
 from app.core import ai_engine
 from app.core.config import settings
+from app.schemas.schemas import PersonBase
 
-# 定义 Router
 router = APIRouter(tags=["Face Recognition"])
 
-# 重新计算 BASE_DIR (为了保存图片)
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# 重新计算BASE_DIR存放图像路径
+BASE_DIR = Path(__file__).resolve().parent.parent
 FACETHRESH = settings.face.threshold
 
 
 @router.post("/recognize")
 async def recognize_face_api(
         photo=Depends(get_photo_mat),
+        objs: List[PersonBase] = None, #TODO
         db: AsyncIOMotorDatabase = Depends(get_session),
 ):
     # 1) 拿图
@@ -30,10 +32,10 @@ async def recognize_face_api(
 
     # 【防线 1：输入源头检查】
     if image_data is None:
-        return JSONResponse(status_code=400, content={"message": "未接收到有效图片数据"})
+        return JSONResponse(status_code=200, content={"message": "未接收到有效图片数据"})
 
     if not isinstance(image_data, np.ndarray) or image_data.size == 0:
-        return JSONResponse(status_code=400, content={"message": "图片数据为空或格式错误"})
+        return JSONResponse(status_code=200, content={"message": "图片数据为空或格式错误"})
 
     # 【防线 2：内存连续性强制】
     if not image_data.flags['C_CONTIGUOUS']:
@@ -41,20 +43,21 @@ async def recognize_face_api(
 
     # 2) 检测+对齐
     try:
-        # 注意：这里调用的是 ai_engine，它依赖 main.py 注入的进程池
+        # 注意：这里调用的是ai_engine，它依赖 main.py 注入的进程池
         result = await ai_engine.detect_and_extract_face(image_data)
+        # TODO yolo训练一个人脸姿态的问题，用于给业务端反馈人像姿态问题（暂时不做）
     except Exception as e:
         print(f"Face Detection Error: {e}")
-        return JSONResponse(status_code=400, content={"message": "人脸检测服务内部错误"})
+        return JSONResponse(status_code=200, content={"message": "人脸检测服务内部错误"})
 
     if result is None:
-        return JSONResponse(status_code=400, content={"message": "未检测到人脸"})
+        return JSONResponse(status_code=200, content={"message": "画面中未能检测到人脸，请重新捕捉人脸！"})
 
     face_image, bbox = result
 
     # 二次检查 result 解包后的内容
     if face_image is None:
-        return JSONResponse(status_code=400, content={"message": "未检测到有效人脸"})
+        return JSONResponse(status_code=200, content={"message": "未检测到有效人脸"})
 
     # 3) 保存检测到的人脸裁剪图
     det_dir = BASE_DIR / "media" / "detections"
@@ -62,10 +65,9 @@ async def recognize_face_api(
     det_name = f"{uuid.uuid4().hex}.jpg"
 
     if isinstance(face_image, np.ndarray) and face_image.size > 0:
-        # 实际生产中可能不需要每次都保存，视需求而定
+        # 测试阶段不需要保存图片，压测炸存储
         # cv2.imwrite(str(det_dir / det_name), face_image)
         pass
-
     detected_face_url = f"/media/detections/{det_name}"
 
     # 4) 取库里用于匹配的数据
@@ -89,7 +91,7 @@ async def recognize_face_api(
         face_image = np.ascontiguousarray(face_image)
 
     if face_image.shape[0] < 10 or face_image.shape[1] < 10:
-        return JSONResponse(status_code=400, content={"message": "检测到的人脸过小，无法识别"})
+        return JSONResponse(status_code=200, content={"message": "检测到的人脸过小，无法识别"})
 
     try:
         emb_q = await ai_engine.get_embedding(face_image)

@@ -4,8 +4,8 @@ from typing import List
 from pathlib import Path
 from bson.binary import Binary
 from fastapi import APIRouter, Depends, HTTPException, Form, Query
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
-from sqlmodel import Session  # 如果您用到sqlmodel的话，虽然看起来主要是mongo
 
 from app.core.database import get_session
 from app.curd import person as person_crud
@@ -15,13 +15,12 @@ from app.core import ai_engine
 from app.utils.utils_mongo import doc_to_person_read
 
 router = APIRouter(prefix="/persons", tags=["Persons Management"])
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 @router.post("", response_model=schemas.PersonRead)
 async def create_person_api(
-        chinese_name: str = Form(...),
-        description: str = Form(None),
+        name: str = Form(...),
+        number: str = Form(None),
         photo=Depends(get_photo_mat),
         db: AsyncIOMotorClient = Depends(get_session),
 ):
@@ -33,11 +32,12 @@ async def create_person_api(
     # 2. 检测并裁剪人脸 (调用 ai_engine)
     result = await ai_engine.detect_and_extract_face(image)
     if result is None:
-        raise HTTPException(status_code=1001, detail="未检测到人脸")
+        return JSONResponse(status_code=200, content={"code": 1001, "message": "未能够检测到人脸"})
+
 
     face_image, _ = result
     if face_image is None:
-        raise HTTPException(status_code=1001, detail="未检测到有效人脸")
+        return JSONResponse(status_code=200, content={"code": 1002, "message": "无效人脸特征"})
 
     # 3. 提取特征向量
     embedding = await ai_engine.get_embedding(face_image)
@@ -46,13 +46,14 @@ async def create_person_api(
     media_dir = BASE_DIR / "media" / "person_photos"
     media_dir.mkdir(parents=True, exist_ok=True)
 
-    filename = f"{chinese_name}_{uuid.uuid4().hex}.jpg"
+    # 文件名
+    filename = f"{name}_{uuid.uuid4().hex[:16]}.jpg"
     save_path = media_dir / filename
     cv2.imwrite(str(save_path), face_image)
 
     person_dict = {
-        "chinese_name": chinese_name,
-        "description": description,
+        "name": name,
+        "number": number,
         "photo_path": f"/media/person_photos/{filename}",
         "embedding": Binary(embedding.tobytes()),
     }
@@ -77,13 +78,13 @@ async def search_person_api(
         persons = person_crud.get_persons_by_name(db, name_keyword=name)
         if not persons:
             raise HTTPException(status_code=404, detail="未找到匹配人物")
-        return {"persons": [{"id": p.id, "name": p.chinese_name, "photo_url": p.photo_path} for p in persons]}
+        return {"persons": [{"id": p.id, "name": p.name, "photo_url": p.photo_path} for p in persons]}
 
     if person_id:
         person = person_crud.get_person_by_id(db, person_id=person_id)
         if not person:
             raise HTTPException(status_code=404, detail="未找到该人物")
-        return {"persons": [{"id": person.id, "name": person.chinese_name, "photo_url": person.photo_path}]}
+        return {"persons": [{"id": person.id, "name": person.name, "photo_url": person.photo_path}]}
 
     raise HTTPException(status_code=400, detail="请输入姓名或ID进行查询")
 
@@ -99,13 +100,13 @@ async def delete_person_general_api(
         if not deleted_persons:
             raise HTTPException(status_code=404, detail="未找到匹配人物")
         return {"deleted_count": len(deleted_persons),
-                "deleted": [{"id": p.id, "name": p.chinese_name} for p in deleted_persons]}
+                "deleted": [{"id": p.id, "name": p.name} for p in deleted_persons]}
 
     if person_id:
         deleted_person = person_crud.delete_person_by_id(db, person_id=person_id)
         if not deleted_person:
             raise HTTPException(status_code=404, detail="未找到该人物")
-        return {"message": f"人物 {deleted_person.chinese_name} 已删除"}
+        return {"message": f"人物 {deleted_person.name} 已删除"}
 
     raise HTTPException(status_code=400, detail="请输入姓名或ID进行删除")
 
@@ -121,7 +122,7 @@ async def delete_persons_by_name_api(
         raise HTTPException(status_code=404, detail="未找到匹配的人物")
     return {
         "deleted_count": len(deleted),
-        "deleted": [{"id": p.id, "chinese_name": p.chinese_name} for p in deleted]
+        "deleted": [{"id": p.id, "name": p.name} for p in deleted]
     }
 
 
