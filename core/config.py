@@ -34,12 +34,22 @@ class FrontLoginSettings(BaseModel):
     username: str
     password: str
 
+class FeatureImageSettings(BaseModel):
+    max_feature_image_width_px: int = 720
+    max_feature_image_height_px: int = 1280
+    min_feature_image_width_px: int = 80
+    min_feature_image_height_px: int= 80
+    max_feature_image_size_m : int = 10
+    max_face_hw: int = 300
+    min_face_hw: int = 40
+
 class Settings(BaseModel):
     db: DBSettings
     face: FaceSettings
     thread: ThreadSettings
     gpu: GpuSettings
     frontlogin: FrontLoginSettings
+    feature_image: FeatureImageSettings
 
 def load_config():
     config_path = Path(__file__).resolve().parent.parent / "config.toml"
@@ -57,7 +67,8 @@ def load_config():
         face=FaceSettings(**config_data["face"]),
         thread=ThreadSettings(**config_data["threading"]),
         gpu=GpuSettings(**config_data["gpu"]),
-        frontlogin=FrontLoginSettings(**config_data["frontlogin"])
+        frontlogin=FrontLoginSettings(**config_data["frontlogin"]),
+        feature_image=FeatureImageSettings(**config_data["image"])
     )
 
 settings = load_config()

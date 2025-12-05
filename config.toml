@@ -14,3 +14,11 @@ max_workers = 2
 [frontlogin]
 username = "admin"
 password = "admin"
+[image]
+max_feature_image_width_px = 720
+max_feature_image_height_px = 1280
+min_feature_image_width_px = 80
+min_feature_image_height_px = 80
+max_feature_image_size_m = 10
+max_face_hw = 300
+min_face_hw = 40
