@@ -132,9 +132,9 @@ async function loadPersons() {
             col.className = 'col';
             col.innerHTML = `
                 <div class="card h-100">
-                    <img src="${person.photo_path}" class="card-img-top" alt="${person.chinese_name}">
+                    <img src="${person.photo_path}" class="card-img-top" alt="${person.name}">
                     <div class="card-body">
-                        <h6 class="card-title text-center">${person.chinese_name}</h6>
+                        <h6 class="card-title text-center">${person.name}</h6>
                     </div>
                 </div>
             `;
@@ -167,7 +167,7 @@ async function handleAddPerson(event) {
             throw new Error(result.detail || '添加失败，请检查输入。');
         }
         
-        showAlert(`人物 "${result.chinese_name}" 添加成功!`, 'success', 'alert-container-add');
+        showAlert(`人物 "${result.name}" 添加成功!`, 'success', 'alert-container-add');
         form.reset(); // 清空表单
         loadPersons(); // 重新加载人物列表
     } catch (error) {
@@ -289,7 +289,7 @@ async function handleBatchUpload() {
     for (const file of validFiles) {
         const nameWithoutExt = file.name.replace(/\.[^.]+$/, '');
         const fd = new FormData();
-        fd.append('chinese_name', nameWithoutExt);
+        fd.append('name', nameWithoutExt);
         // description 不传：后端会是 None
         fd.append('photo', file);
 
