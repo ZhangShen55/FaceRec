@@ -7,7 +7,7 @@ from app.core.config import settings
 
 router = APIRouter(tags=["Web UI"])
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=BASE_DIR / "static/templates")
 
 USERNAME = settings.frontlogin.username

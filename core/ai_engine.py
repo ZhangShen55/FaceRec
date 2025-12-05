@@ -101,34 +101,6 @@ async def detect_and_extract_face(image: np.ndarray):
         print(f"Process Pool Error: {e}")
         return None, None
 
-# 创建全程的进程池
-# dlib_process_pool = ProcessPoolExecutor(
-#     max_workers=8,
-#     initializer=_init_dlib_worker
-# )
-
-
-# async def detect_and_extract_face(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
-#     """
-#     主入口：将任务提交给进程池
-#     """
-#     loop = asyncio.get_running_loop()
-#     try:
-#         # run_in_executor 同样适用于 ProcessPoolExecutor
-#         # 注意：这里的 image 会被 pickle 序列化并通过 IPC 发送给子进程
-#         # 返回的 aligned 和 bbox 也会被序列化发回来
-#         result = await loop.run_in_executor(
-#             dlib_process_pool,
-#             _dlib_task_implementation,
-#             image
-#         )
-#         return result
-#     except Exception as e:
-#         print(f"Dlib Process Error: {e}")
-#         return None, None
-
-
-
 
 # ArcFace 常用 5点模板（112x112）
 _ARCFACE_5PTS = np.array([

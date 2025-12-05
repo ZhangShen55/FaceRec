@@ -17,7 +17,7 @@ from app.router import faces, persons, web
 log = get_logger(__name__)
 log.setLevel(logging.DEBUG)
 
-BASE_DIR = Path(__file__).resolve().pare # /app
+BASE_DIR = Path(__file__).resolve().parent # /app
 MAX_WORKERS = settings.thread.max_workers
 
 # ---------------- 生命周期管理 (核心) ----------------
