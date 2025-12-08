@@ -26,3 +26,4 @@ class DatabaseError(BaseAPIException):
     数据库操作异常
     """
     pass
+

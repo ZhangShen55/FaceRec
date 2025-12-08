@@ -9,22 +9,24 @@ import numpy as np
 import fastdeploy as fd
 from concurrent.futures import ProcessPoolExecutor
 from app.core.config import settings
+from app.core.logger import get_logger
 
+logger = get_logger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 _SHAPE_PREDICTOR_PATH = str(BASE_DIR / 'shape_predictor_68_face_landmarks.dat')
 
 # embading模型全局加载加载
-GPU_ID = int(settings.gpu.gpu_id)  # 这里默认使用第0卡
+GPU_ID = int(settings.gpu.gpu_id)
 option = fd.RuntimeOption()
 option.use_gpu(GPU_ID)
 embedding_model = fd.vision.faceid.ArcFace(str(BASE_DIR / 'ms1mv3_arcface_r100.onnx'),
                                            runtime_option=option)
 
-# 1. 定义全局变量 (默认为 None，等待 main.py 启动时注入)
+# 定义全局变量，会被main.py初始化
 GLOBAL_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
 
-# ---- 子进程定义 ----
+# 定义子进程的全局变量
 _mp_detector = None
 _mp_predictor = None
 
@@ -35,13 +37,13 @@ def _init_dlib_worker():
     在这里加载模型，确保每个进程有一份独立的模型，互不干扰。
     """
     global _mp_detector, _mp_predictor
-    print(f"[Worker PID: {os.getpid()}] 正在加载 Dlib 模型...")
+    logger.info(f"[Worker PID: {os.getpid()}] 正在加载 Dlib 模型...")
     try:
         _mp_detector = dlib.get_frontal_face_detector()
         _mp_predictor = dlib.shape_predictor(_SHAPE_PREDICTOR_PATH)
-        print(f"[Worker PID: {os.getpid()}] Dlib 模型加载完成")
+        logger.info(f"[Worker PID: {os.getpid()}] Dlib 模型加载完成")
     except Exception as e:
-        print(f"[Worker PID: {os.getpid()}] 模型加载失败: {e}")
+        logger.info(f"[Worker PID: {os.getpid()}] 模型加载失败: {e}")
 
 
 def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
@@ -50,7 +52,9 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     """
     # 使用子进程局部的模型
     global _mp_detector, _mp_predictor
+    tip = "人脸特征像素正常，可以使用" # 图像质量提示信息
     if _mp_detector is None or _mp_predictor is None:
+        logger.error(f"[Worker PID: {os.getpid()}] Dlib 模型未加载，请检查是否子进程初始化失败")
         return None, None
 
     # 转灰度cpu计算
@@ -64,19 +68,21 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     face = max(faces, key=lambda r: r.width() * r.height())
     (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
 
+    if w < 200 or h < 200:
+        tip = "人脸特征像素小于200x200，可能影响对比"
+
+    logger.info(f"人脸像素大小: {w}x{h}")
     # 2. 关键点
     shape = _mp_predictor(gray, face)
 
-    # 3. 对齐辅助函数 (假设这些函数您已经定义好了，并且没有引用全局状态)
-    # 注意：_shape_to_np, _five_from_68, _align_by_5pts 必须是纯函数
-    # 如果它们依赖外部变量，也需要搬进来或者作为参数传进来
+    # _shape_to_np, _five_from_68, _align_by_5pts 必须是纯函数,如果有依赖外部变量，必须使用全局变量或参数传递
     lm68 = _shape_to_np(shape)
     lm5 = _five_from_68(lm68)
     aligned = _align_by_5pts(image, lm5, (112, 112))
 
     bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
 
-    return aligned, bbox
+    return aligned, bbox, tip
 
 
 async def detect_and_extract_face(image: np.ndarray):
@@ -99,7 +105,7 @@ async def detect_and_extract_face(image: np.ndarray):
         )
     except Exception as e:
         print(f"Process Pool Error: {e}")
-        return None, None
+        return None, None, None
 
 
 # ArcFace 常用 5点模板（112x112）

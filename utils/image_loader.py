@@ -1,21 +1,38 @@
 # app/image_loader.py
-from __future__ import annotations
-import io, base64, re, httpx, cv2, numpy as np
-from fastapi import Form, File, UploadFile, HTTPException, Depends
+# from __future__ import annotations
+import base64, re, httpx, cv2, numpy as np
+from fastapi import Form, UploadFile, HTTPException, Depends
 from typing import Union, Tuple
+from app.core.config import settings
+from app.core.exceptions import ImageValidationError
+from app.core.logger import get_logger
 
-# 1. 先让 FastAPI 把「字符串」或「文件」都原样交给我们
+logger = get_logger(__name__)
+
+# 设置全局变量，用于校验图像像素总数
+# 默认 80*80 = 6400
+MIN_IMAGE_PIXELS = int(settings.feature_image.min_feature_image_width_px) * int(settings.feature_image.min_feature_image_height_px)
+# 默认 1280*720 = 921600
+MAX_IMAGE_PIXELS = int(settings.feature_image.max_feature_image_width_px) * int(settings.feature_image.max_feature_image_height_px)
+# 限制单个图像文件大小为 10MB
+MAX_IMAGE_SIZE_M = int(settings.feature_image.max_feature_image_size_m)
+logger.info(f"设置全局变量 MIN_IMAGE_PIXELS={MIN_IMAGE_PIXELS}, MAX_IMAGE_PIXELS={MAX_IMAGE_PIXELS}, MAX_IMAGE_SIZE_M={MAX_IMAGE_SIZE_M}M")
+
 async def _raw_photo(
     photo: Union[str, UploadFile] = Form(...)  # 只留一个字段
 ) -> Union[str, bytes]:
     """
+    先接受来自后端的图片数据，然后根据类型判断是 URL、Base64 或文件上传。
     返回:
         str  -> URL 或 base64
         bytes-> 文件内容
     """
     if isinstance(photo, str):
-        return photo          # URL 或 base64
-    # 否则是 UploadFile
+        # URL 或 base64
+        logger.info(f"接收到图片 URL 或 base64: {photo}")
+        return photo
+    # 否则是
+    logger.info(f"接收到图片文件: {photo.filename}")
     return await photo.read()
 
 
@@ -31,92 +48,103 @@ async def get_photo_mat(raw: Union[str, bytes, UploadFile] = Depends(_raw_photo)
             try:
                 resp = httpx.get(raw, timeout=10, follow_redirects=True)
                 resp.raise_for_status()
+                logger.info(f"通过url下载图片成功: {raw}")
             except Exception as e:
-                raise HTTPException(4001, f"下载图片失败: {e}")
-            return _decode(resp.content), raw  # 返回 URL 和图片数据
+                logger.error(f"通过url下载图片失败，url: {raw}, 错误信息: {e}")
+                raise HTTPException(400, f"通过url下载图片失败，url: {raw}, 错误信息: {e}")
+            # 返回 URL 和图片数据
+            return _decode(resp.content), raw
         else:
             # base64 分支
             raw = re.sub(r'^data:image/\w+;base64,', '', raw)
+            logger.info(f"接收到图片 base64码")
             try:
                 content = base64.b64decode(raw)
             except Exception as e:
-                raise HTTPException(4002, f"base64 解码失败: {e}")
+                logger.error(f"base64 解码失败，错误信息: {e}")
+                raise HTTPException(400, f"base64 解码失败: {e}")
             return _decode(content), "base64_image"  # 返回 base64 和图片数据
 
 
     elif isinstance(raw, bytes):
         if len(raw) == 0:
-            raise HTTPException(400, "接收到的二进制数据为空")
+            logger.error(f"接收到的图像二进制数据为空")
+            raise HTTPException(400, "接收到的图像二进制数据为空")
         return _decode(raw), "unknown_file"
 
 
     elif isinstance(raw, UploadFile):
         # 1. 读取文件内容
         contents = await raw.read()
-        # 【新增】检查文件是否为空 (0字节)
+        logger.info(f"接收到图片文件: {raw.filename}")
+        # 检查文件是否为空
         if len(contents) == 0:
-            # 这是一个非常具体的客户端错误，明确告知哪个文件有问题
+            logger.error(f"上传的文件 '{raw.filename}' 是空的 (0KB)，请检查文件是否损坏")
             raise HTTPException(
-                status_code=400,
-                detail=f"上传的文件 '{raw.filename}' 是空的 (0KB)，请检查文件是否损坏"
+                400,
+                f"上传的文件 '{raw.filename}' 是空的 (0KB)，请检查文件是否损坏"
             )
-        # 【建议】同时复用之前提到的“最大文件限制”，防止内存炸弹
-        # MAX_IMAGE_SIZE = 10 * 1024 * 1024  (假设定义了常量)
-        # if len(contents) > MAX_IMAGE_SIZE:
-        #     raise HTTPException(status_code=400, detail="文件过大")
+        # 限制文件大小 默认10MB
+        MAX_IMAGE_SIZE = MAX_IMAGE_SIZE_M * 1024 * 1024
+        if len(contents) > MAX_IMAGE_SIZE:
+            logger.error(f"上传的文件 '{raw.filename}' 大小超过 {MAX_IMAGE_SIZE_M}MB，请上传小于 {MAX_IMAGE_SIZE_M}MB 的文件")
+            raise HTTPException(400, "上传文件图像过大，请上传小于 10MB 的文件")
         return _decode(contents), raw.filename  # 返回图片数据和文件名
 
-    # 如果没有找到匹配的情况，抛出异常
-    raise HTTPException(status_code=4003, detail="无法解析图片")
+    logger.error(f"未知图像异常类型，无法解析图片")
+    raise HTTPException(status_code=400, detail="未知图像异常类型，无法解析图片")
 
 # ---------- 通用解码 ----------
 def _decode(content: bytes) -> np.ndarray:
-    # 【修复 1】在一切开始前，检查 bytes 是否为空
     if not content:
-        raise HTTPException(status_code=400, detail="上传的图片内容为空")
+        logger.error(f"[decode] 上传的图片内容为空")
+        raise HTTPException(status_code=400, detail="[decode] 上传的图片内容为空")
 
     nparr = np.frombuffer(content, np.uint8)
 
-    # 【修复 2】即使 bytes 不为空，也要防止转换后的数组为空
+    # 防止空文件
     if nparr.size == 0:
-        raise HTTPException(status_code=400, detail="图片数据无效(Size 0)")
+        logger.error(f"[decode] 图片数据无效(Size 0)")
+        raise HTTPException(status_code=400, detail="[decode] 图片数据无效(Size 0)")
 
-    # 只有确保 nparr 有内容了，才敢传给 cv2
     try:
+        logger.info(f"[decode] 图片数据有效，开始解码")
         mat = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     except Exception as e:
-        # 捕获 OpenCV 可能抛出的其他奇奇怪怪的错误
-        raise HTTPException(status_code=400, detail=f"图片解码异常: {str(e)}")
+        logger.error(f"[decode] 图片解码异常: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"[decode] 图片解码异常: {str(e)}")
 
     if mat is None:
-        raise HTTPException(status_code=400, detail="图片解码失败，文件格式可能不受支持")
+        logger.error(f"[decode] 图片解码失败，文件格式可能不受支持")
+        raise HTTPException(status_code=400, detail="[decode] 图片解码失败，文件格式可能不受支持")
 
-    # 【运维建议】强烈建议加上这一步：规整内存，防止 Dlib 崩溃
+    # 对图像的像素进行检测，抛出异常
+    _validate_image_pixels(mat)
+
     if not mat.flags['C_CONTIGUOUS']:
+        logger.info(f"[decode] 图片数据不是连续的，进行内存拷贝")
         mat = np.ascontiguousarray(mat)
 
     return mat
 
 
-# 2. 再依赖上一层，做真正的解析
-# async def get_photo_mat(raw: Union[str, bytes] = Depends(_raw_photo)) -> np.ndarray:
-#     if isinstance(raw, str):
-#         raw = raw.strip()
-#         if raw.startswith("http"):
-#             # URL 分支
-#             try:
-#                 resp = httpx.get(raw, timeout=10, follow_redirects=True)
-#                 resp.raise_for_status()
-#             except Exception as e:
-#                 raise HTTPException(400, f"下载图片失败: {e}")
-#             return _decode(resp.content)
-#         else:
-#             # base64 分支
-#             raw = re.sub(r'^data:image/\w+;base64,', '', raw)
-#             try:
-#                 content = base64.b64decode(raw)
-#             except Exception as e:
-#                 raise HTTPException(400, f"base64 解码失败: {e}")
-#             return _decode(content)
-#     # bytes 分支（文件）
-#     return _decode(raw)
+def _validate_image_pixels(mat: np.ndarray):
+    """
+    校验图像整体像素总数是否在规定范围内。
+    规定范围:
+    - 下限: 80x80 = 6400 px
+    - 上限: 1280x720 = 921600 px
+    这里需要理清楚一个概念：114*114px, 可以是500*500的大小（前端），后端通过cv获取的大小就是114*114。
+    """
+    h, w = mat.shape[:2]
+    total_pixels = h * w
+
+    if total_pixels < MIN_IMAGE_PIXELS:
+        raise ImageValidationError(
+            400,f"图片整体分辨率过低 ({w}x{h}={total_pixels}px)，不能低于 6400px (如 80x80)"
+        )
+
+    if total_pixels > MAX_IMAGE_PIXELS:
+        raise ImageValidationError(
+            400,f"图片整体分辨率过高 ({w}x{h}={total_pixels}px)，不能高于 921600px"
+        )

@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
+from pydantic import Field
 from bson import ObjectId
 
 # MongoDB 使用 ObjectId 作为主键
@@ -22,8 +23,8 @@ class PersonCreate(BaseModel):
 
 # PersonRead 是返回给前端的模型
 class PersonRead(BaseModel):
+    # id: str = Field(alias="_id")
     id: str
     name: str
     number: Optional[str] = None
     photo_path: Optional[str] = None
-

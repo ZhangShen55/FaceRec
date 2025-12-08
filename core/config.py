@@ -5,6 +5,8 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+config_path = Path(__file__).resolve().parent.parent / "config.toml"
+
 class DBSettings(BaseModel):
     username: str
     password: str
@@ -12,6 +14,7 @@ class DBSettings(BaseModel):
     port: str
     database: str
     auth_source: str
+    limit: int = 10000 # 限制返回的结果条数
 
     @computed_field
     def url(self) -> str:
@@ -34,6 +37,11 @@ class FrontLoginSettings(BaseModel):
     username: str
     password: str
 
+
+class LoggerSettings(BaseModel):
+    level: str
+    filename: str = "face_recognizer.log"
+
 class FeatureImageSettings(BaseModel):
     max_feature_image_width_px: int = 720
     max_feature_image_height_px: int = 1280
@@ -50,9 +58,9 @@ class Settings(BaseModel):
     gpu: GpuSettings
     frontlogin: FrontLoginSettings
     feature_image: FeatureImageSettings
+    logger: LoggerSettings
 
 def load_config():
-    config_path = Path(__file__).resolve().parent.parent / "config.toml"
     logger.debug(f"Loading config from {config_path}")
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
@@ -68,7 +76,9 @@ def load_config():
         thread=ThreadSettings(**config_data["threading"]),
         gpu=GpuSettings(**config_data["gpu"]),
         frontlogin=FrontLoginSettings(**config_data["frontlogin"]),
-        feature_image=FeatureImageSettings(**config_data["image"])
+        feature_image=FeatureImageSettings(**config_data["image"]),
+        logger=LoggerSettings(**config_data["logger"])
     )
+
 
 settings = load_config()

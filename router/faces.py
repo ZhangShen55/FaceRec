@@ -13,13 +13,14 @@ from app.utils.image_loader import get_photo_mat
 from app.core import ai_engine
 from app.core.config import settings
 from app.schemas.schemas import PersonBase
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["Face Recognition"])
 
-# 重新计算BASE_DIR存放图像路径
 BASE_DIR = Path(__file__).resolve().parent.parent
 FACETHRESH = settings.face.threshold
-
 
 @router.post("/recognize")
 async def recognize_face_api(
@@ -27,39 +28,38 @@ async def recognize_face_api(
         objs: List[PersonBase] = None, #TODO
         db: AsyncIOMotorDatabase = Depends(get_session),
 ):
-    # 1) 拿图
+    logger.debug(f"接受到请求：{photo}")
     image_data, filename = (photo if isinstance(photo, tuple) else (photo, None))
 
-    # 【防线 1：输入源头检查】
     if image_data is None:
         return JSONResponse(status_code=200, content={"message": "未接收到有效图片数据"})
 
     if not isinstance(image_data, np.ndarray) or image_data.size == 0:
         return JSONResponse(status_code=200, content={"message": "图片数据为空或格式错误"})
 
-    # 【防线 2：内存连续性强制】
+    # 内存连续性强制要求
     if not image_data.flags['C_CONTIGUOUS']:
         image_data = np.ascontiguousarray(image_data)
 
-    # 2) 检测+对齐
+    # 检测&对齐人脸
     try:
         # 注意：这里调用的是ai_engine，它依赖 main.py 注入的进程池
         result = await ai_engine.detect_and_extract_face(image_data)
         # TODO yolo训练一个人脸姿态的问题，用于给业务端反馈人像姿态问题（暂时不做）
     except Exception as e:
-        print(f"Face Detection Error: {e}")
+        logger.error(f"人脸检测服务内部错误: {e}")
         return JSONResponse(status_code=200, content={"message": "人脸检测服务内部错误"})
 
     if result is None:
         return JSONResponse(status_code=200, content={"message": "画面中未能检测到人脸，请重新捕捉人脸！"})
 
-    face_image, bbox = result
+    face_image, bbox , _ = result
 
-    # 二次检查 result 解包后的内容
+    # 再次检查result解包后的内容
     if face_image is None:
         return JSONResponse(status_code=200, content={"message": "未检测到有效人脸"})
 
-    # 3) 保存检测到的人脸裁剪图
+    # 3) 保存检测到的人脸裁剪图，主要是用于前端显示
     det_dir = BASE_DIR / "media" / "detections"
     det_dir.mkdir(parents=True, exist_ok=True)
     det_name = f"{uuid.uuid4().hex}.jpg"
@@ -71,7 +71,7 @@ async def recognize_face_api(
     detected_face_url = f"/media/detections/{det_name}"
 
     # 4) 取库里用于匹配的数据
-    persons = await person.get_embeddings_for_match(db, limit=7000)
+    persons = await person.get_embeddings_for_match(db, limit=10000)
     if not persons:
         return {
             "has_face": True,

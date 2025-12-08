@@ -5,18 +5,22 @@ import uuid
 from logging.config import dictConfig
 from contextvars import ContextVar
 
+LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_DIR = os.getenv("LOG_DIR", "/app/logs/facerecapi.log")
+
 # 每个请求的 request_id（中间件里设置）
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
 
 class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        # 日志里统一带 request_id
         record.request_id = request_id_ctx.get("-")
         return True
 
 def setup_logging() -> None:
-    """主进程初始化日志（只需要调用一次）"""
-    level = os.getenv("LOG_LEVEL", "DEBUG").upper()
+    """主进程初始化日志"""
+    level = LEVEL.upper()
+    filename = LOG_DIR
+
     dictConfig({
         "version": 1,
         "disable_existing_loggers": False,
@@ -47,11 +51,20 @@ def setup_logging() -> None:
                 "filters": ["request_id"],
                 "formatter": "access",
                 "level": level,
+            },
+            "log_file": {
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": filename,
+                "maxBytes": 50 * 1024 * 1024,
+                "backupCount": 5,
+                "filters": ["request_id"],
+                "formatter": "default",
+                "level": level,
             }
         },
         "loggers": {
             # 你自己的应用日志
-            "app": {"handlers": ["console"], "level": level, "propagate": False},
+            "app": {"handlers": ["console", "log_file"], "level": level, "propagate": False},
             # 统一接管 uvicorn 日志
             "uvicorn": {"handlers": ["console"], "level": level, "propagate": False},
             "uvicorn.error": {"handlers": ["console"], "level": level, "propagate": False},
@@ -60,11 +73,39 @@ def setup_logging() -> None:
         "root": {"handlers": ["console"], "level": level},
     })
 
-def get_logger(name: str) -> logging.Logger:
-    # 使用 app.* 命名空间，便于筛选
+
+
+
+_init_lock = logging._lock #复用logging模块自带RLock
+_initialized = False
+
+def _ensure_setup():
+    """线程安全的单次初始化"""
+    global _initialized
+    if _initialized:
+        return
+    with _init_lock:
+        if not _initialized:
+            setup_logging()
+            _initialized = True
+
+def get_logger(name: str | None = None) -> logging.Logger:
+    """
+    自动完成 logging 配置并返回 logger。
+    usage：
+        from config import get_logger
+        logger = get_logger(__name__)
+    """
+    _ensure_setup()
+    if name is None:
+        name = "app"
     if not name.startswith("app"):
         name = f"app.{name}"
     return logging.getLogger(name)
 
 def new_request_id() -> str:
     return uuid.uuid4().hex[:16]
+
+setup_logging()
+logger = get_logger(__name__)
+logger.info("日志等级设置为:%s, 日志文件位置:%s", LEVEL, LOG_DIR)

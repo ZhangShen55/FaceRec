@@ -5,6 +5,7 @@ host = "10.80.5.25"
 port = "27017"
 database = "facerecapi"
 auth_source = "admin"
+limit = 5000
 [face]
 threshold = 0.4
 [gpu]
@@ -15,10 +16,13 @@ max_workers = 2
 username = "admin"
 password = "admin"
 [image]
-max_feature_image_width_px = 720
-max_feature_image_height_px = 1280
+max_feature_image_width_px = 2001
+max_feature_image_height_px = 2001
 min_feature_image_width_px = 80
 min_feature_image_height_px = 80
 max_feature_image_size_m = 10
 max_face_hw = 300
 min_face_hw = 40
+[logger]
+level = "INFO"
+filename = "/app/logs/facerecapi.log"
