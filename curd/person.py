@@ -1,7 +1,9 @@
 # app/person.py
 from bson import ObjectId
+from typing import List
 from app.core.config import settings
 from app.core.exceptions import DatabaseError
+from app.schemas.schemas import PersonBase
 
 # 获取单个人物
 async def get_person(db, person_id: str):
@@ -105,3 +107,31 @@ async def get_embeddings_for_match(db, limit=LIMIT):
         {}, {"embedding": 1, "name": 1, "photo_path": 1}
     )
     return await cursor.limit(limit).to_list(length=limit)
+
+
+# 通过排课人物候选表
+async def get_persons_embeddings(db, persons: List[PersonBase]) -> List[dict]:
+    """
+    通过排课人物候选列表，获取人物embedding列表
+    """
+    if not persons:
+        return []
+        # 构建 $or 查询条件
+        # 注意：这里假设数据库字段已同步修改为 name 和 number
+        # 如果数据库还没改名，需要映射 {"name": c.name, "number": c.number}
+    query_conditions = []
+    for p in persons:
+        condition = {"name": p.name}
+        if p.number:
+            condition["number"] = p.number
+        query_conditions.append(condition)
+
+    print(f"query_conditions======="
+          f": {query_conditions}")
+    if not query_conditions:
+        return []
+
+    projection = {"embedding": 1, "name": 1, "number": 1, "photo_path": 1}
+    cursor = db["persons"].find({"$or": query_conditions}, projection)
+
+    return await cursor.to_list(length=None)
