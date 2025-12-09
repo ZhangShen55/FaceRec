@@ -1,6 +1,7 @@
 # app/ai_engine.py
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from pathlib import Path
+from bson.binary import Binary
 import asyncio
 import os
 import cv2
@@ -195,6 +196,42 @@ def get_embedding_sync(face_aligned: np.ndarray) -> np.ndarray:
     emb = emb / n
     return emb
 
+
+def find_best_match_embedding(emb_q: np.ndarray, candidate_docs: List[dict]) -> Tuple[float, Optional[dict]]:
+    """
+    在候选文档列表中寻找最大相似度
+    返回: (最佳相似度, 最佳匹配文档)
+    """
+    db_vecs = []
+    valid_docs = []
+
+    for d in candidate_docs:
+        e = d.get("embedding")
+        if e is None: continue
+
+        # BSON Binary -> bytes -> numpy
+        if isinstance(e, Binary):
+            e = bytes(e)
+        vec = np.frombuffer(e, dtype=np.float32)
+
+        if vec.size != 512: continue
+
+        # 归一化
+        n = np.linalg.norm(vec) + 1e-12
+        vec = vec / n
+        db_vecs.append(vec)
+        valid_docs.append(d)
+
+    if not db_vecs:
+        return 0.0, None
+
+    # 批量计算点积 (余弦相似度)
+    # emb_q 假设已经归一化
+    sims = np.dot(db_vecs, emb_q)
+    best_idx = int(np.argmax(sims))
+    best_sim = float(sims[best_idx])
+
+    return best_sim, valid_docs[best_idx]
 
 
 
