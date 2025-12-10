@@ -76,10 +76,13 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     # 2. 关键点
     shape = _mp_predictor(gray, face)
 
-    # _shape_to_np, _five_from_68, _align_by_5pts 必须是纯函数,如果有依赖外部变量，必须使用全局变量或参数传递
+    # _shape_to_np, _five_from_68, _align_by_5pts 应为纯函数
     lm68 = _shape_to_np(shape)
     lm5 = _five_from_68(lm68)
     aligned = _align_by_5pts(image, lm5, (112, 112))
+
+    if not aligned.flags['C_CONTIGUOUS']:
+        aligned = np.ascontiguousarray(aligned)
 
     bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
 
@@ -123,7 +126,7 @@ def _shape_to_np(shape: dlib.full_object_detection) -> np.ndarray:
     return np.array([(shape.part(i).x, shape.part(i).y) for i in range(68)], dtype=np.float32)
 
 def _five_from_68(landmarks68: np.ndarray) -> np.ndarray:
-    # 68点里：眼睛 36-41, 42-47；鼻尖 30；嘴角 48, 54
+    # 人脸68点
     left_eye = landmarks68[36:42].mean(axis=0)
     right_eye = landmarks68[42:48].mean(axis=0)
     nose = landmarks68[30]
@@ -132,51 +135,13 @@ def _five_from_68(landmarks68: np.ndarray) -> np.ndarray:
     return np.stack([left_eye, right_eye, nose, left_mouth, right_mouth]).astype(np.float32)
 
 def _align_by_5pts(img: np.ndarray, pts: np.ndarray, size: Tuple[int,int]=(112,112)) -> np.ndarray:
+    """
+    5点对齐
+    """
     dst = _ARCFACE_5PTS
     M = cv2.estimateAffinePartial2D(pts, dst, method=cv2.LMEDS)[0]
     aligned = cv2.warpAffine(img, M, size, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
     return aligned
-
-
-# 异步化处理：利用 `asyncio.to_thread()` 异步执行同步函数
-# async def detect_and_extract_face(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
-#     """
-#     异步检测并裁剪出最大的人脸，并返回裁剪后的人脸图像和人脸坐标（bbox）。
-#     :param image: OpenCV格式的图像 (BGR)
-#     :return: (aligned_face, bbox) 如果未检测到人脸返回 (None, None)
-#     """
-#     return await asyncio.to_thread(detect_and_extract_face_sync, image)
-
-"""
-def detect_and_extract_face_sync(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
-    # 同步的检测和裁剪最大人脸的方法
-
-    # 预处理：转灰度图 (OpenCV 是线程安全的，不需要加锁，放在锁外面提高效率)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # ================= 关键修改开始 =================
-    # 使用锁包围所有 Dlib 的操作
-    with _DLIB_LOCK:
-        # 1. 人脸检测
-        faces = detector(gray, 1)
-        if not faces:
-            return None, None
-        # 拿最大人脸
-        face = max(faces, key=lambda r: r.width() * r.height())
-        (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
-        # 2. 关键点预测 (这个步骤非常容易崩，必须锁住)
-        shape = predictor(gray, face)
-        # 3. 后续计算 (如果 _shape_to_np 涉及 dlib 对象操作，也要锁住)
-        lm68 = _shape_to_np(shape)
-    # ================= 关键修改结束 =================
-    # 这里的计算是纯 Numpy/Python，不需要锁，可以释放锁让其他线程进来
-    start_y = max(0, int(y - h * 0.4))
-    lm5 = _five_from_68(lm68)
-    aligned = _align_by_5pts(image, lm5, (112, 112))
-
-    bbox = {"x": int(x), "y": int(start_y), "w": int(w), "h": int(h)}
-    return aligned, bbox
-"""
 
 # 异步获取特征向量
 async def get_embedding(face_aligned: np.ndarray) -> np.ndarray:
@@ -185,7 +150,11 @@ async def get_embedding(face_aligned: np.ndarray) -> np.ndarray:
     :param face_aligned: 对齐后的 112x112 人脸图像
     :return: 归一化后的 512维特征向量
     """
-    return await asyncio.to_thread(get_embedding_sync, face_aligned)
+    # return await asyncio.to_thread(get_embedding_sync, face_aligned)
+    emb =  await asyncio.to_thread(get_embedding_sync, face_aligned)
+    # 归一化 方便点积计算
+    emb_q = emb / (np.linalg.norm(emb) + 1e-12)
+    return emb_q
 
 def get_embedding_sync(face_aligned: np.ndarray) -> np.ndarray:
     """同步获取特征向量的方法"""
@@ -195,7 +164,6 @@ def get_embedding_sync(face_aligned: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(emb) + 1e-12
     emb = emb / n
     return emb
-
 
 def find_best_match_embedding(emb_q: np.ndarray, candidate_docs: List[dict]) -> Tuple[float, Optional[dict]]:
     """

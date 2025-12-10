@@ -109,8 +109,33 @@ async def get_embeddings_for_match(db, limit=LIMIT):
     return await cursor.limit(limit).to_list(length=limit)
 
 
+async def get_persons_embeddings(db, numbers: List[str]) -> List[dict]:
+    """
+    通过排课老师编号列表 (numbers)，获取人物 embedding 列表
+    使用 MongoDB $in 操作符，性能优于 $or
+    """
+    if not numbers:
+        return []
+
+    # 过滤掉空字符串或None，确保查询有效
+    valid_numbers = [n for n in numbers if n]
+
+    if not valid_numbers:
+        return []
+
+    # 构建查询条件: WHERE number IN ['1001', '1002', ...]
+    query = {"number": {"$in": valid_numbers}}
+
+    # 只查询需要的字段
+    projection = {"embedding": 1, "name": 1, "number": 1, "photo_path": 1}
+
+    cursor = db["persons"].find(query, projection)
+
+    return await cursor.to_list(length=None)
+
+
 # 通过排课人物候选表
-async def get_persons_embeddings(db, persons: List[PersonBase]) -> List[dict]:
+async def get_persons_embeddings2(db, persons: List[PersonBase]) -> List[dict]:
     """
     通过排课人物候选列表，获取人物embedding列表
     """
