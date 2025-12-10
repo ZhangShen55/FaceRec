@@ -10,10 +10,11 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import get_session
 from app.curd import person
-from app.utils.image_loader import get_photo_mat
+from app.utils.image_loader import get_photo_mat, base64_to_mat
 from app.core import ai_engine
 from app.core.config import settings
-from app.schemas.schemas import PersonBase
+from app.core.database import db
+from app.schemas.schemas import PersonBase, PersonRecognizeRequest
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,12 +23,12 @@ router = APIRouter(tags=["Face Recognition"])
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FACETHRESH = settings.face.threshold
+REC_MIN_FACE_HW = int(settings.face.min_face_hw)
 
 @router.post("/recognize")
 async def recognize_face_api(
         photo=Depends(get_photo_mat),
-        persons: List[PersonBase] = Body(default=[], description="可能被排课老师对象"),
-        db: AsyncIOMotorDatabase = Depends(get_session),
+        db: AsyncIOMotorDatabase = Depends(get_session)
 ):
     logger.debug(f"接受到请求：{photo}")
     image_data, filename = (photo if isinstance(photo, tuple) else (photo, None))
@@ -85,7 +86,7 @@ async def recognize_face_api(
                 "name": None,
                 "number": None,
                 "similarity": None,
-                # "photo_url": None, # 业务不需要
+                # "photo_url": None,
             },
             "message": "人脸特征库为空，请先上传人脸数据",
             "filename": filename,
@@ -169,10 +170,10 @@ async def recognize_face_api(
 async def recognize_face_api2(
         photo=Depends(get_photo_mat),
         db: AsyncIOMotorDatabase = Depends(get_session),
+        # numbers: List[str] = Form(..., description="可能被排课老师对象"),
         persons: List[PersonBase] = Body(default=[], description="可能被排课老师对象")
 ):
-    # logger.info(f"person: {persons}")
-    # logger.info(f"接受到请求，候选人数: {len(persons)}")
+    logger.info(f"接受到number参数：numbers: {persons},number_len: {len(persons)}")
     image_data, filename = (photo if isinstance(photo, tuple) else (photo, None))
 
     if image_data is None:
@@ -206,15 +207,15 @@ async def recognize_face_api2(
         raise HTTPException(status_code=200, content={"message": "检测到的人脸过小，无法识别"})
 
     try:
+        # 获取到检测图像的embedding
         emb_q = await ai_engine.get_embedding(face_image)
-        # 确保 emb_q 归一化，方便后续点积计算
+        # 归一化 为点积计算
         emb_q = emb_q / (np.linalg.norm(emb_q) + 1e-12)
     except Exception as e:
         logger.error(f"人脸特征提取失败: {e}")
         raise HTTPException(status_code=500, content={"message": "特征提取失败"})
 
-    # --- D. 准备返回结构的基础数据 ---
-    # 保存检测图片 (仅生成路径，不实际写入以节省IO，除非调试)
+
     det_name = f"{uuid.uuid4().hex}.jpg"
     detected_face_url = f"/media/detections/{det_name}"
 
@@ -237,12 +238,115 @@ async def recognize_face_api2(
             "filename": filename,
         }
 
-    # --- E. 策略1：优先比对 (Priority Match) ---
+
+    # 优先与给定的 numbers人物进行对比
     CANDIDATE_THRESHOLD = 0.2
 
     if persons:
         # 1. 获取指定候选人的特征
-        candidate_docs = await person.get_persons_embeddings(db, persons)
+        candidate_docs = await person.get_persons_embeddings2(db, persons)
+
+        logger.info(f"候选人数: {len(candidate_docs)}")
+
+        if candidate_docs:
+            # 2. 比对
+            best_sim, best_doc = ai_engine.find_best_match_embedding(emb_q, candidate_docs)
+
+            # 3. 判断结果
+            if best_sim > CANDIDATE_THRESHOLD:
+                logger.info(f"优先比对命中: {best_doc.get('name')} (Sim: {best_sim})")
+                return create_response(True, "priority_match", best_doc, best_sim)
+
+        logger.info("优先比对未命中，转入全局比对...")
+
+    # --- F. 策略2：全局比对 (Global Match) ---
+    # 1. 获取全量特征 (limit 限制防止内存溢出)
+    all_docs = await person.get_embeddings_for_match(db, limit=10000)
+
+    if not all_docs:
+        return create_response(False, "empty_gallery")
+
+    # 2. 比对
+    best_sim, best_doc = ai_engine.find_best_match_embedding(emb_q, all_docs)
+
+    # 3. 判断结果 (使用严格阈值)
+    if best_sim >= FACETHRESH:
+        logger.info(f"全局比对命中: {best_doc.get('name')} (Sim: {best_sim})")
+        return create_response(True, "ok", best_doc, best_sim)
+    else:
+        logger.info(f"全局比对失败，最高分: {best_sim}")
+        return create_response(False, "no_match", None, best_sim)
+
+
+@router.post("/recognize3")
+async def recognize_face_api3(
+        request: PersonRecognizeRequest = Body(..., description="人脸识别请求"),
+):
+    # 打印请求参数
+    logger.debug(f"[recognize] 接收到请求参数：{request}")
+
+    # 1. 解析图片数据
+    image_data, filename = await base64_to_mat(request.photo)
+
+    if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
+        logger.error(f"未接收到有效图片数据或图像数据存在异常")
+        raise HTTPException(status_code=400, content={"code": 5000, "message": "未接收到有效图片数据或图像数据存在异常"})
+
+    try:
+        face_image, bbox , _ = result = await ai_engine.detect_and_extract_face(image_data)
+    except Exception as e:
+        logger.error(f"人脸检测服务内部错误: {e}")
+        raise HTTPException(status_code=400, content={"code": 5001, "message": "人脸检测服务内部错误"})
+
+    if face_image is None:
+        logger.error(f"未检测到有效人脸")
+        raise HTTPException(status_code=400, content={"code": 5002, "message": "画面中未能检测到人脸，请重新捕捉人脸"})
+
+    if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
+        # 默认最小10*10
+        logger.error(f"检测到的人脸过小小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px，无法识别，请重新捕捉人脸！")
+        raise HTTPException(status_code=200, content={"code": 5003, "message": "检测到的人脸过小小于10*10px，无法识别，请重新捕捉人脸"})
+
+    try:
+        # 获取到检测图像的embedding
+        emb_q = await ai_engine.get_embedding(face_image)
+        # 归一化 为点积计算
+        # emb_q = emb_q / (np.linalg.norm(emb_q) + 1e-12)
+    except Exception as e:
+        logger.error(f"人脸特征提取失败: {e}")
+        raise HTTPException(status_code=500, content={"message": "特征提取失败"})
+
+    det_name = f"{uuid.uuid4().hex}.jpg"
+    detected_face_url = f"/media/detections/{det_name}"
+
+    # 定义统一的成功返回闭包
+    def create_response(matched: bool, reason: str, person_doc: dict = None, score: float = 0.0):
+        match_data = {
+            "matched": matched,
+            "reason": reason,
+            "person_id": str(person_doc["_id"]) if person_doc else None,
+            "name": person_doc.get("name") if person_doc else None,
+            "number": person_doc.get("number") if person_doc else None,
+            "similarity": f"{score * 100:.2f}%" if score else None,
+        }
+        return {
+            "has_face": True,
+            # "detected_face_url": detected_face_url,
+            "bbox": bbox,
+            "match": match_data,
+            "message": "识别成功" if matched else "未匹配到该人物",
+            "filename": filename,
+        }
+
+
+    # 优先与给定的 numbers人物进行对比
+    CANDIDATE_THRESHOLD = 0.2
+
+    persons = request.persons
+
+    if persons:
+        # 1. 获取指定候选人的特征
+        candidate_docs = await person.get_persons_embeddings2(db, persons)
 
         logger.info(f"候选人数: {len(candidate_docs)}")
 

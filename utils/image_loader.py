@@ -29,11 +29,33 @@ async def _raw_photo(
     """
     if isinstance(photo, str):
         # URL 或 base64
-        logger.info(f"接收到图片 URL 或 base64: {photo}")
+        logger.info(f"接收到图片 URL 或 base64")
         return photo
     # 否则是
     logger.info(f"接收到图片文件: {photo.filename}")
     return await photo.read()
+
+# 将base64字符串转为图片矩阵
+async def base64_to_mat(base64_str: str) -> Tuple[np.ndarray, str]:
+    """
+    将base64字符串转为图片矩阵。
+    """
+    # 判断是否是base64字符串
+    if not re.match(r'^data:image/\w+;base64,', base64_str):
+        logger.error(f"不是base64字符串")
+        raise HTTPException(400, "不是base64字符串")
+
+    # 去掉头部的base64标识
+    pure_base64 = re.sub(r'^data:image/\w+;base64,', '', base64_str)
+
+    # 解码base64字符串
+    try:
+        content = base64.b64decode(pure_base64)
+    except Exception as e:
+        logger.error(f"base64 解码失败，错误信息: {e}")
+        raise HTTPException(400, f"base64 解码失败: {e}")
+    # 解码图片矩阵
+    return _decode(content), "base64_image"
 
 
 
@@ -115,7 +137,7 @@ def _decode(content: bytes) -> np.ndarray:
         raise HTTPException(status_code=400, detail=f"[decode] 图片解码异常: {str(e)}")
 
     if mat is None:
-        logger.error(f"[decode] 图片解码失败，文件格式可能不受支持")
+        logger.error(f"[decode] 图片解码失败，文件格式可能不支持")
         raise HTTPException(status_code=400, detail="[decode] 图片解码失败，文件格式可能不受支持")
 
     # 对图像的像素进行检测，抛出异常
