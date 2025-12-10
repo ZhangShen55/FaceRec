@@ -23,6 +23,7 @@ min_feature_image_height_px = 80
 max_feature_image_size_m = 10
 max_face_hw = 300
 min_face_hw = 40
+rec_min_face_hw = 10
 [logger]
 level = "INFO"
 filename = "/app/logs/facerecapi.log"
