@@ -27,6 +27,7 @@ class DBSettings(BaseModel):
 class FaceSettings(BaseModel):
     threshold: float
     candidate_threshold: float
+    rec_min_face_hw: int
 
 class ThreadSettings(BaseModel):
     max_workers: int
@@ -51,7 +52,6 @@ class FeatureImageSettings(BaseModel):
     max_feature_image_size_m : int = 10
     max_face_hw: int = 300
     min_face_hw: int = 40
-    rec_min_face_hw: int = 10
 
 class Settings(BaseModel):
     db: DBSettings

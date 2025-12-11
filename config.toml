@@ -9,6 +9,7 @@ limit = 5000 # 限制返回结果条数
 [face]
 threshold = 0.4 # 人脸识别阈值
 candidate_threshold = 0.2 # 候选人脸阈值
+rec_min_face_hw = 10 # （识别阶段）最小人脸高度和宽度
 [gpu]
 gpu_id = 0  # GPU Embedding GPU ID
 [threading]
@@ -24,7 +25,6 @@ min_feature_image_height_px = 80    # 最小特征图片高度
 max_feature_image_size_m = 10 # 最大特征图片大小（MB）
 max_face_hw = 300  # （提取特征阶段）最大人脸高度和宽度
 min_face_hw = 40  # 最小人脸高度和宽度
-rec_min_face_hw = 10 # （识别阶段）最小人脸高度和宽度
 [logger]
 level = "INFO"  # 日志级别
 filename = "/app/logs/facerecapi.log"  # 日志文件路径
