@@ -26,6 +26,7 @@ class DBSettings(BaseModel):
         )
 class FaceSettings(BaseModel):
     threshold: float
+    candidate_threshold: float
 
 class ThreadSettings(BaseModel):
     max_workers: int
