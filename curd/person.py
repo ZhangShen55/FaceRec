@@ -108,7 +108,32 @@ async def get_embeddings_for_match(db, limit=LIMIT):
     )
     return await cursor.limit(limit).to_list(length=limit)
 
+# 通过排课人物候选表
+async def get_targets_embeddings(db, persons: List[PersonBase]) -> List[dict]:
+    """
+    通过排课人物候选列表，获取人物embedding列表
+    """
+    if not persons:
+        return []
+        # 构建 $or 查询条件
+        # 注意：这里假设数据库字段已同步修改为 name 和 number
+        # 如果数据库还没改名，需要映射 {"name": c.name, "number": c.number}
+    query_conditions = []
+    for p in persons:
+        condition = {"name": p.name}
+        if p.number:
+            condition["number"] = p.number
+        query_conditions.append(condition)
 
+    if not query_conditions:
+        return []
+
+    projection = {"embedding": 1, "name": 1, "number": 1, "photo_path": 1}
+    cursor = db["persons"].find({"$or": query_conditions}, projection)
+
+    return await cursor.to_list(length=None)
+
+'''
 async def get_persons_embeddings(db, numbers: List[str]) -> List[dict]:
     """
     通过排课老师编号列表 (numbers)，获取人物 embedding 列表
@@ -128,35 +153,6 @@ async def get_persons_embeddings(db, numbers: List[str]) -> List[dict]:
 
     # 只查询需要的字段
     projection = {"embedding": 1, "name": 1, "number": 1, "photo_path": 1}
-
     cursor = db["persons"].find(query, projection)
-
     return await cursor.to_list(length=None)
-
-
-# 通过排课人物候选表
-async def get_persons_embeddings2(db, persons: List[PersonBase]) -> List[dict]:
-    """
-    通过排课人物候选列表，获取人物embedding列表
-    """
-    if not persons:
-        return []
-        # 构建 $or 查询条件
-        # 注意：这里假设数据库字段已同步修改为 name 和 number
-        # 如果数据库还没改名，需要映射 {"name": c.name, "number": c.number}
-    query_conditions = []
-    for p in persons:
-        condition = {"name": p.name}
-        if p.number:
-            condition["number"] = p.number
-        query_conditions.append(condition)
-
-    print(f"query_conditions======="
-          f": {query_conditions}")
-    if not query_conditions:
-        return []
-
-    projection = {"embedding": 1, "name": 1, "number": 1, "photo_path": 1}
-    cursor = db["persons"].find({"$or": query_conditions}, projection)
-
-    return await cursor.to_list(length=None)
+'''
