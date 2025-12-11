@@ -9,7 +9,7 @@ limit = 5000 # 限制返回结果条数
 [face]
 threshold = 0.4 # 人脸识别阈值
 candidate_threshold = 0.2 # 候选人脸阈值
-rec_min_face_hw = 10 # （识别阶段）最小人脸高度和宽度
+rec_min_face_hw = 50 # （识别阶段）最小人脸高度和宽度
 [gpu]
 gpu_id = 0  # GPU Embedding GPU ID
 [threading]

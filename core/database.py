@@ -14,14 +14,6 @@ if MONGODB_URI:
     parsed = parse_uri(MONGODB_URI)
     dbname = (parsed.get("database") or os.getenv("MONGO_DB", "facerecapi"))
 else:
-    # # 分段提供的情况：这里才进行一次编码（只编码一次！）
-    # USER = quote_plus(os.getenv("MONGO_USER", "root"))
-    # PASS = quote_plus(os.getenv("MONGO_PASS", "root"))
-    # HOST = os.getenv("MONGO_HOST", "127.0.0.1")
-    # PORT = os.getenv("MONGO_PORT", "27017")
-    # DB   = os.getenv("MONGO_DB", "facerecapi")
-    # AUTH = os.getenv("MONGO_AUTHSOURCE", DB)  # 用户建在哪个库，就写哪个；常见是 admin
-
     USER = quote_plus(MONGODB_DB.username)
     PASS = quote_plus(MONGODB_DB.password)
     HOST = MONGODB_DB.host

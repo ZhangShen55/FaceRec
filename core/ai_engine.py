@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 _SHAPE_PREDICTOR_PATH = str(BASE_DIR / 'shape_predictor_68_face_landmarks.dat')
 
-# embading模型全局加载加载
+# embadding模型全局加载加载
 GPU_ID = int(settings.gpu.gpu_id)
 option = fd.RuntimeOption()
 option.use_gpu(GPU_ID)
@@ -72,7 +72,7 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     if w < 200 or h < 200:
         tip = "人脸特征像素小于200x200，可能影响对比"
 
-    logger.info(f"人脸像素大小: {w}x{h}")
+    logger.info(f"[dlib] 人脸像素大小: {w}x{h}")
     # 2. 关键点
     shape = _mp_predictor(gray, face)
 
