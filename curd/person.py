@@ -104,7 +104,7 @@ async def get_persons_by_name_and_number(db, name: str, number: str):
 LIMIT = settings.db.limit
 async def get_embeddings_for_match(db, limit=LIMIT):
     cursor = db["persons"].find(
-        {}, {"embedding": 1, "name": 1, "photo_path": 1}
+        {}, {"embedding": 1, "name": 1, "number": 1,"photo_path": 1}
     )
     return await cursor.limit(limit).to_list(length=limit)
 
