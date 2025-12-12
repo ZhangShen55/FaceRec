@@ -2,12 +2,13 @@ import uuid
 import numpy as np
 from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException
-from app.curd import person
+from app.services import person
 from app.utils.image_loader import base64_to_mat
 from app.core import ai_engine
 from app.core.config import settings
 from app.core.database import db
-from app.schemas.schemas import PersonRecognizeRequest, recognize_response
+from app.models.request.face_interface_req import PersonRecognizeRequest
+from app.models.response.face_interface_rep import RecognizeResp
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +25,7 @@ REASON_MAP = {
     "global": "全局比对命中",
 }
 
-@router.post("/recognize")
+@router.post("/recognize",response_model=RecognizeResp)
 async def recognize_face_api(request: PersonRecognizeRequest = Body(..., description="人脸识别请求")):
     logger.debug(f"[recognize] 接收到请求参数：{request}")
     # 1. 解析图片数据
@@ -78,7 +79,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             # 3. 判断结果
             if best_sim > CANDIDATE_THRESHOLD:
                 logger.info(f"[recognize] 优先比对命中: {best_doc.get('name')} (Sim: {best_sim})")
-                return recognize_response(
+                return RecognizeResp.from_recognize(
                     matched=True,has_face=True,
                     bbox=bbox,
                     best_sim=best_sim,
@@ -98,12 +99,13 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     # 2. 比对
     best_sim, best_doc = ai_engine.find_best_match_embedding(emb_q, all_docs)
+    logger.info(f"[recognize] 全局匹配best结果: {best_doc.get('name')},{best_doc.get('number')},(Sim: {best_sim})")
     threshold = request.threshold if request.threshold else THRESHOLD
 
     # 3. 判断结果 (使用严格阈值)
     if best_sim >= threshold:
         logger.info(f"[recognize] 全局比对命中: {best_doc.get('name')} (Sim: {best_sim})")
-        return recognize_response(
+        return RecognizeResp.from_recognize(
             matched=True,
             has_face=True if bbox else False,
             bbox=bbox,
@@ -114,7 +116,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
         )
     else:
         logger.info(f"[recognize] 全局比对失败，最高分: {best_sim} 低于阈值: {threshold}")
-        return recognize_response(
+        return RecognizeResp.from_recognize(
             matched=False,
             has_face=True if bbox else False,
             bbox=bbox,

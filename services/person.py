@@ -3,7 +3,7 @@ from bson import ObjectId
 from typing import List
 from app.core.config import settings
 from app.core.exceptions import DatabaseError
-from app.schemas.schemas import PersonBase
+from app.models.schemas import PersonBase
 
 # 获取单个人物
 async def get_person(db, person_id: str):
