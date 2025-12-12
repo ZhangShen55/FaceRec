@@ -18,13 +18,13 @@ max_workers = 2  # dlib 但是实例的进程数
 username = "admin"  # 前端登录用户名
 password = "admin"  # 前端登录密码
 [image]
-max_feature_image_width_px = 2001  # 最大特征图片宽度 （以下都是为了控制像素大小）
-max_feature_image_height_px = 2001  # 最大特征图片高度
+max_feature_image_width_px = 9999  # 最大特征图片宽度 （以下都是为了控制像素大小）
+max_feature_image_height_px = 9999  # 最大特征图片高度
 min_feature_image_width_px = 80     # 最小特征图片宽度
 min_feature_image_height_px = 80    # 最小特征图片高度
 max_feature_image_size_m = 10 # 最大特征图片大小（MB）
-max_face_hw = 300  # （提取特征阶段）最大人脸高度和宽度
-min_face_hw = 40  # 最小人脸高度和宽度
+max_face_hw = 999  # （提取特征阶段）最大人脸高度和宽度
+min_face_hw = 50  # 最小人脸高度和宽度
 [logger]
 level = "INFO"  # 日志级别
 filename = "/app/logs/facerecapi.log"  # 日志文件路径
