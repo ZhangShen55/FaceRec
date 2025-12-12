@@ -63,7 +63,7 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     # 1. 检测人脸cpu计算
     faces = _mp_detector(gray, 1)
     if not faces:
-        return None, None
+        return None, None, None
 
     # 选择最大人脸
     face = max(faces, key=lambda r: r.width() * r.height())

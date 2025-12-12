@@ -32,22 +32,22 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
         logger.error(f"[recognize] 未接收到有效图片数据或图像数据存在异常")
-        raise HTTPException(status_code=400, content={"message": "未接收到有效图片数据或图像数据存在异常"})
+        raise HTTPException(status_code=400, detail="[recognize] 未接收到有效图片数据或图像数据存在异常")
 
     try:
         face_image, bbox , _ = await ai_engine.detect_and_extract_face(image_data)
     except Exception as e:
         logger.error(f"[recognize] 人脸检测服务内部错误: {e}")
-        raise HTTPException(status_code=401, content={"message": "[recognize] 人脸检测服务内部错误"})
+        raise HTTPException(status_code=401, detail="[recognize] 人脸检测服务内部错误")
 
     if face_image is None:
         logger.error(f"[recognize] 未检测到有效人脸")
-        raise HTTPException(status_code=402, content={"message": "[recognize] 未检测到有效人脸"})
+        raise HTTPException(status_code=402, detail="[recognize] 未检测到有效人脸")
 
     if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
         # 默认最小10*10
         logger.error(f"[recognize] 检测到的人脸过小小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px，无法识别，请重新捕捉人脸")
-        raise HTTPException(status_code=403, content={"message": f"[recognize] 检测到的人脸过小小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}*px，无法识别，请重新捕捉人脸"})
+        raise HTTPException(status_code=403, detail=f"[recognize] 检测到的人脸过小小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}*px，无法识别，请重新捕捉人脸")
 
     try:
         # 获取到检测图像的embedding
@@ -56,7 +56,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
         # emb_q = emb_q / (np.linalg.norm(emb_q) + 1e-12)
     except Exception as e:
         logger.error(f"[recognize] 人脸特征提取失败: {e}")
-        raise HTTPException(status_code=404, content={"message": "[recognize] 人脸特征提取失败"})
+        raise HTTPException(status_code=404, detail="[recognize] 人脸特征提取失败")
 
     det_name = f"{uuid.uuid4().hex}.jpg"
     detected_face_url = f"/media/detections/{det_name}"
@@ -94,7 +94,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     if not all_docs:
         logger.info("[recognize] (全局)数据库中没有有效人脸特征")
-        raise HTTPException(status_code=405, content={"message": "[recognize] (全局)数据库中没有有效人脸特征,请先录入人脸数据"})
+        raise HTTPException(status_code=405, detail="[recognize] (全局)数据库中没有有效人脸特征,请先录入人脸数据")
 
     # 2. 比对
     best_sim, best_doc = ai_engine.find_best_match_embedding(emb_q, all_docs)
