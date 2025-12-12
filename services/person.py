@@ -109,18 +109,19 @@ async def get_embeddings_for_match(db, limit=LIMIT):
     return await cursor.limit(limit).to_list(length=limit)
 
 # 通过排课人物候选表
-async def get_targets_embeddings(db, persons: List[PersonBase]) -> List[dict]:
+async def get_targets_embeddings(db, targets: List[PersonBase]) -> List[dict]:
     """
     通过排课人物候选列表，获取人物embedding列表
     """
-    if not persons:
+    if not targets:
         return []
-        # 构建 $or 查询条件
-        # 注意：这里假设数据库字段已同步修改为 name 和 number
-        # 如果数据库还没改名，需要映射 {"name": c.name, "number": c.number}
+    # 构建 $or 查询条件
+    # 数库表结构 {"name": c.name, "number": c.number}
     query_conditions = []
-    for p in persons:
-        condition = {"name": p.name}
+    condition = {}
+    for p in targets:
+        if p.name:
+            condition["name"] = p.name
         if p.number:
             condition["number"] = p.number
         query_conditions.append(condition)
