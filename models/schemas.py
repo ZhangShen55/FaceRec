@@ -14,12 +14,7 @@ class Person(PersonBase):
             ObjectId: str
         }
 
-# PersonRead 是返回给前端的模型
-class PersonRead(BaseModel):
-    id: str
-    name: str
-    number: Optional[str] = None
-    photo_path: Optional[str] = None
+
 
 
 # class PersonRecognizeRequest(BaseModel):

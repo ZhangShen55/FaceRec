@@ -11,7 +11,7 @@ async def get_person(db, person_id: str):
 
 # 获取所有人物
 async def get_persons(db, skip: int = 0, limit: int = 100):
-    return await db["persons"].find().skip(skip).limit(limit).to_list(length=limit)
+    return await db["persons"].find({"embedding": 0},{"tip": 0}).skip(skip).limit(limit).to_list(length=limit)
 
 
 # 创建人物
@@ -19,11 +19,13 @@ async def create_person(db, person_dict: dict):
 
     # 唯一性校验
     exists = await db.persons.find_one(
-        {"name": person_dict["name"], "number": person_dict["number"]}
+        {"number": person_dict["number"]},{"embedding": 0},{"tip": 0}
+        # {"name": person_dict["name"], "number": person_dict["number"]}
     )
 
     if exists:
-        raise DatabaseError(status_code=400, detail=f"请勿重复创建人物,name: {person_dict['name']}, number: {person_dict['number']}")
+        # raise DatabaseError(status_code=400, detail=f"Person已存在请勿重复创建,name: {person_dict['name']}, number: {person_dict['number']}")
+        raise DatabaseError(status_code=400, detail=f"该人物已存在请勿重复创建 预计存入number：{person_dict['number']}，实际库中存在 name: {exists['name']}, number: {exists['number']}")
     # 插入
     res = await db["persons"].insert_one(person_dict)
     return await db["persons"].find_one({"_id": res.inserted_id}, {"embedding": 0})
@@ -44,14 +46,14 @@ async def delete_persons_by_name(db, name_keyword: str):
     result = await db["persons"].delete_many({"name": {"$regex": name_keyword, "$options": "i"}})
     return result.deleted_count
 
-async def delete_person_by_id(db, person_id: str):
+async def delete_person_by_id(db, id: str):
     """
     根据ID删除人物
     """
-    result = await db["persons"].delete_one({"_id": ObjectId(person_id)})
+    result = await db["persons"].delete_one({"_id": ObjectId(id)})
     if result.deleted_count == 0:
         return None
-    return {"_id": person_id}
+    return {"_id": id}
 
 
 async def delete_persons_by_name_exact(db, name: str):
