@@ -56,7 +56,7 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     tip = "人脸特征像素正常，可以使用" # 图像质量提示信息
     if _mp_detector is None or _mp_predictor is None:
         logger.error(f"[Worker PID: {os.getpid()}] Dlib 模型未加载，请检查是否子进程初始化失败")
-        return None, None
+        return None, None, None
 
     # 转灰度cpu计算
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -70,7 +70,7 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
 
     if w < 200 or h < 200:
-        tip = "人脸特征像素小于200x200，可能影响对比"
+        tip = "人脸特征像素过低，或影响检测效果"
 
     logger.info(f"[dlib] 人脸像素大小: {w}x{h}")
     # 2. 关键点
