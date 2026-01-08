@@ -11,8 +11,9 @@ from app.core.database import db
 from app.core import ai_engine
 from app.core.config import settings
 from app.core.logger import get_logger
-from app.router import faces, persons, web
+from app.router import faces, persons, web, ops
 from app.core.logger import request_id_ctx, new_request_id
+from app.middleware import APIStatsMiddleware
 
 logger = get_logger(__name__)
 
@@ -58,6 +59,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# ---------------- 注册中间件 ----------------
+# 1. API 统计中间件（必须在 request_id 中间件之后）
+app.add_middleware(APIStatsMiddleware)
+
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     rid = new_request_id()
@@ -72,6 +77,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/media", StaticFiles(directory=BASE_DIR / "media"), name="media")
 
 # ---------------- 注册路由 ----------------
+app.include_router(ops.router)
 app.include_router(faces.router)
 app.include_router(persons.router)
 app.include_router(web.router)

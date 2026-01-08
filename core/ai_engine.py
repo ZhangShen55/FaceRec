@@ -15,13 +15,13 @@ from app.core.logger import get_logger
 logger = get_logger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-_SHAPE_PREDICTOR_PATH = str(BASE_DIR / 'shape_predictor_68_face_landmarks.dat')
+_SHAPE_PREDICTOR_PATH = str(BASE_DIR / 'ai_models' / 'shape_predictor_68_face_landmarks.dat')
 
 # embadding模型全局加载加载
 GPU_ID = int(settings.gpu.gpu_id)
 option = fd.RuntimeOption()
 option.use_gpu(GPU_ID)
-embedding_model = fd.vision.faceid.ArcFace(str(BASE_DIR / 'ms1mv3_arcface_r100.onnx'),
+embedding_model = fd.vision.faceid.ArcFace(str(BASE_DIR / 'ai_models' / 'ms1mv3_arcface_r100.onnx'),
                                            runtime_option=option)
 
 # 定义全局变量，会被main.py初始化
@@ -200,6 +200,64 @@ def find_best_match_embedding(emb_q: np.ndarray, candidate_docs: List[dict]) -> 
     best_sim = float(sims[best_idx])
 
     return best_sim, valid_docs[best_idx]
+
+
+def find_top_matches(emb_q: np.ndarray, candidate_docs: List[dict], top_k: int = 3, min_threshold: float = 0.0):
+    """
+    在候选文档列表中寻找相似度最高的 top_k 个匹配
+
+    参数:
+        emb_q: 查询 embedding（已归一化）
+        candidate_docs: 候选文档列表
+        top_k: 返回的最大数量
+        min_threshold: 最小相似度阈值
+
+    返回: List[(相似度, 文档)]，按相似度降序排列
+    """
+    db_vecs = []
+    valid_docs = []
+
+    for d in candidate_docs:
+        e = d.get("embedding")
+        if e is None:
+            continue
+
+        # BSON Binary -> bytes -> numpy
+        if isinstance(e, Binary):
+            e = bytes(e)
+        vec = np.frombuffer(e, dtype=np.float32)
+
+        if vec.size != 512:
+            continue
+
+        # 归一化
+        n = np.linalg.norm(vec) + 1e-12
+        vec = vec / n
+        db_vecs.append(vec)
+        valid_docs.append(d)
+
+    if not db_vecs:
+        return []
+
+    # 批量计算点积 (余弦相似度)
+    sims = np.dot(db_vecs, emb_q)
+
+    # 找到所有大于等于阈值的索引
+    valid_indices = np.where(sims >= min_threshold)[0]
+
+    if len(valid_indices) == 0:
+        return []
+
+    # 按相似度降序排序
+    sorted_indices = valid_indices[np.argsort(-sims[valid_indices])]
+
+    # 取前 top_k 个
+    top_indices = sorted_indices[:top_k]
+
+    # 返回 (相似度, 文档) 列表
+    results = [(float(sims[idx]), valid_docs[idx]) for idx in top_indices]
+
+    return results
 
 
 

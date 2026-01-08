@@ -7,8 +7,8 @@ from app.utils.image_loader import base64_to_mat
 from app.core import ai_engine
 from app.core.config import settings
 from app.core.database import db
-from app.models.request.face_interface_req import PersonRecognizeRequest
-from app.models.response.face_interface_rep import RecognizeResp
+from app.models.request.face_interface_req import PersonRecognizeRequest, BatchRecognizeRequest
+from app.models.response.face_interface_rep import RecognizeResp, BBox, MatchItem, BatchRecognizeResp, FrameInfo
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,108 +20,395 @@ THRESHOLD = settings.face.threshold
 CANDIDATE_THRESHOLD = settings.face.candidate_threshold
 REC_MIN_FACE_HW = int(settings.face.rec_min_face_hw)
 
-REASON_MAP = {
-    "priority": "优先比对命中",
-    "global": "全局比对命中",
-}
-
-@router.post("/recognize",response_model=RecognizeResp)
+@router.post("/recognize", response_model=RecognizeResp)
 async def recognize_face_api(request: PersonRecognizeRequest = Body(..., description="人脸识别请求")):
     logger.debug(f"[recognize] 接收到请求参数：{request}")
-    # 1. 解析图片数据
+
+    # 1. 确定阈值
+    threshold = request.threshold if request.threshold else THRESHOLD
+    targets = request.targets if request.targets else []
+
+    # 2. 预加载数据库数据（避免每帧都查询）
+    # logger.info("[recognize] 预加载数据库数据...")
+    all_docs = await person.get_embeddings_for_match(db)
+
+    if not all_docs:
+        logger.info("[recognize] 数据库中没有有效人脸特征")
+        return RecognizeResp(
+            has_face=True,
+            bbox=None,
+            threshold=threshold,
+            match=None,
+            message="匹配失败，未能够匹配到目标人物"
+        )
+
+    target_docs = []
+    if targets:
+        target_docs = await person.get_targets_embeddings(db, targets)
+        logger.info(f"[recognize] targets 查询到 {len(target_docs)} 个候选人")
+
+    # 3. 解析图片数据
     image_data, filename = await base64_to_mat(request.photo)
 
     if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
         logger.error(f"[recognize] 未接收到有效图片数据或图像数据存在异常")
         raise HTTPException(status_code=400, detail="[recognize] 未接收到有效图片数据或图像数据存在异常")
 
+    # 4. 检测人脸
     try:
-        face_image, bbox , _ = await ai_engine.detect_and_extract_face(image_data)
+        face_image, bbox, _ = await ai_engine.detect_and_extract_face(image_data)
     except Exception as e:
         logger.error(f"[recognize] 人脸检测服务内部错误: {e}")
-        raise HTTPException(status_code=401, detail="[recognize] 人脸检测服务内部错误")
+        raise HTTPException(status_code=500, detail="[recognize] 人脸检测服务内部错误")
 
     if face_image is None:
-        logger.error(f"[recognize] 未检测到有效人脸")
-        raise HTTPException(status_code=402, detail="[recognize] 未检测到有效人脸")
+        logger.info(f"[recognize] 未检测到有效人脸")
+        return RecognizeResp(
+            has_face=False,
+            bbox=None,
+            threshold=threshold,
+            match=None,
+            message="图像中未检测到人脸，请重新捕捉人脸"
+        )
 
+    # 5. 验证人脸尺寸
     if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
-        # 默认最小10*10
-        logger.error(f"[recognize] 检测到的人脸过小小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px，无法识别，请重新捕捉人脸")
-        raise HTTPException(status_code=403, detail=f"[recognize] 检测到的人脸过小小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}*px，无法识别，请重新捕捉人脸")
+        logger.info(f"[recognize] 检测到的人脸过小: {face_image.shape[0]}x{face_image.shape[1]}px，小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px")
+        return RecognizeResp(
+            has_face=True,
+            bbox=BBox(**bbox) if bbox else None,
+            threshold=threshold,
+            match=None,
+            message=f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别"
+        )
 
+    # 6. 提取特征
     try:
-        # 获取到检测图像的embedding
         emb_q = await ai_engine.get_embedding(face_image)
-        # 归一化 为点积计算
-        # emb_q = emb_q / (np.linalg.norm(emb_q) + 1e-12)
     except Exception as e:
         logger.error(f"[recognize] 人脸特征提取失败: {e}")
-        raise HTTPException(status_code=404, detail="[recognize] 人脸特征提取失败")
+        raise HTTPException(status_code=500, detail="[recognize] 人脸特征提取失败")
 
-    det_name = f"{uuid.uuid4().hex}.jpg"
-    detected_face_url = f"/media/detections/{det_name}"
+    # 7. 全局比对：找 similarity >= threshold 的前 3 人
+    logger.info("[recognize] 开始全局比对...")
 
-    # 优先与候选的persons人物进行对比
-    CANDIDATE_THRESHOLD = 0.2
-    targets = request.targets
+    # 使用新函数找 top3 且 >= threshold 的人
+    result_A = ai_engine.find_top_matches(emb_q, all_docs, top_k=3, min_threshold=threshold)
+    logger.info(f"[recognize] 全局比对找到 {len(result_A)} 个 >= 阈值 {threshold} 的匹配")
+
+    # 8. 如果有 targets，进行 targets 比对
+    result_B = []
+    if target_docs:
+        # targets 使用宽松阈值 threshold/2
+        target_threshold = threshold / 2
+        result_B = ai_engine.find_top_matches(
+            emb_q, target_docs, top_k=len(target_docs), min_threshold=target_threshold
+        )
+        logger.info(f"[recognize] targets 比对找到 {len(result_B)} 个 >= 阈值 {target_threshold} 的匹配")
+
+    # 9. 合并去重：按 number 去重，优先保留 is_target=True 的
+    match_dict = {}  # key: number, value: (similarity, doc, is_target)
+
+    # 先添加 result_A（is_target=False）
+    for sim, doc in result_A:
+        number = doc.get("number")
+        if number:
+            match_dict[number] = (sim, doc, False)
+
+    # 再添加 result_B（is_target=True），会覆盖 result_A 中相同 number 的项
+    for sim, doc in result_B:
+        number = doc.get("number")
+        if number:
+            match_dict[number] = (sim, doc, True)
+
+    # 10. 按相似度降序排序
+    final_matches = sorted(match_dict.values(), key=lambda x: x[0], reverse=True)
+
+    # 11. 构建响应
+    if not final_matches:
+        logger.info("[recognize] 未找到任何匹配")
+        return RecognizeResp(
+            has_face=True,
+            bbox=BBox(**bbox) if bbox else None,
+            threshold=threshold,
+            match=None,
+            message="匹配失败，未能够匹配到目标人物"
+        )
+
+    # 12. 构建 match 列表
+    match_items = []
+    global_count = len(result_A)
+    target_count = len(result_B)
+
+    for sim, doc, is_target in final_matches:
+        match_items.append(MatchItem(
+            id=str(doc["_id"]),
+            name=doc.get("name"),
+            number=doc.get("number"),
+            similarity=f"{sim * 100:.2f}%",
+            is_target=is_target
+        ))
+
+    # 13. 构建消息
+    best_match = final_matches[0]
+    best_name = best_match[1].get("name")
+    best_number = best_match[1].get("number")
+
     if targets:
-        logger.info("[recognize] 优先targets比对...")
-        # 1. 获取指定候选人的特征
-        candidate_docs = await person.get_targets_embeddings(db, targets)
+        message = f"匹配成功，≥阈值{threshold*100:.2f}%有{global_count}位，targets命中{target_count}位，最相似的是{best_name}_{best_number}"
+    else:
+        message = f"匹配成功，≥阈值{threshold*100:.2f}%有{len(final_matches)}位，最相似的是{best_name}_{best_number}"
 
-        logger.info(f"[recognize] 传递排课人数:{len(targets)} -> 成功匹配到的人数: {len(candidate_docs)}")
+    logger.info(f"[recognize] {message}")
 
-        if candidate_docs:
-            # 2. 比对
-            best_sim, best_doc = ai_engine.find_best_match_embedding(emb_q, candidate_docs)
+    return RecognizeResp(
+        has_face=True,
+        bbox=BBox(**bbox) if bbox else None,
+        threshold=threshold,
+        match=match_items,
+        message=message
+    )
 
-            # 3. 判断结果
-            if best_sim > CANDIDATE_THRESHOLD:
-                logger.info(f"[recognize] 优先比对命中: {best_doc.get('name')} (Sim: {best_sim})")
-                return RecognizeResp.from_recognize(
-                    matched=True,has_face=True,
-                    bbox=bbox,
-                    best_sim=best_sim,
-                    threshold=CANDIDATE_THRESHOLD,
-                    reason=REASON_MAP["priority"],
-                    person_doc=best_doc
+
+@router.post("/recognize/batch", response_model=BatchRecognizeResp)
+async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., description="批量人脸识别请求（多帧独立识别）")):
+    """
+    批量识别接口（多帧独立识别，取最优结果）
+
+    策略：每张图片独立识别，汇总所有结果取最高相似度
+    适用场景：视频流抓拍、同一人的多角度照片等
+    """
+    logger.debug(f"[recognize/batch] 接收到请求，帧数: {len(request.photos)}")
+
+    threshold = request.threshold if request.threshold else THRESHOLD
+    targets = request.targets if request.targets else []
+
+    if not request.photos:
+        raise HTTPException(status_code=400, detail="photos 列表不能为空")
+
+    # 预加载数据库数据（避免每帧都查询）
+    all_docs = await person.get_embeddings_for_match(db)
+    if not all_docs:
+        logger.warning("[recognize/batch] 数据库中没有有效人脸特征")
+        return BatchRecognizeResp(
+            total_frames=len(request.photos),
+            valid_frames=0,
+            threshold=threshold,
+            frames=[],
+            match=None,
+            confidence=0.0,
+            message="数据库中暂无人脸数据，请先录入"
+        )
+
+    target_docs = []
+    if targets:
+        target_docs = await person.get_targets_embeddings(db, targets)
+        logger.info(f"[recognize/batch] targets 查询到 {len(target_docs)} 个候选人")
+
+    # 第一步：逐帧识别，每帧都执行完整的识别流程
+    frames_results = []  # 每帧的识别结果
+    valid_frame_count = 0
+
+    for idx, photo_base64 in enumerate(request.photos):
+        frame_result = {
+            'index': idx,
+            'has_face': False,
+            'bbox': None,
+            'error': None,
+            'matches': []  # 该帧的 top3 匹配结果
+        }
+
+        try:
+            # 解析图片
+            image_data, _ = await base64_to_mat(photo_base64)
+
+            if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
+                frame_result['error'] = "无效的图片数据"
+                frames_results.append(frame_result)
+                logger.warning(f"[recognize/batch] 第{idx}帧: 无效的图片数据")
+                continue
+
+            # 检测人脸
+            face_image, bbox, _ = await ai_engine.detect_and_extract_face(image_data)
+
+            if face_image is None:
+                frame_result['error'] = "未检测到人脸"
+                frames_results.append(frame_result)
+                logger.info(f"[recognize/batch] 第{idx}帧: 未检测到人脸")
+                continue
+
+            frame_result['has_face'] = True
+            frame_result['bbox'] = BBox(**bbox) if bbox else None
+
+            # 验证人脸尺寸
+            if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
+                frame_result['error'] = f"人脸过小({face_image.shape[0]}x{face_image.shape[1]}px)"
+                frames_results.append(frame_result)
+                logger.info(f"[recognize/batch] 第{idx}帧: 人脸过小")
+                continue
+
+            # 提取特征
+            emb_q = await ai_engine.get_embedding(face_image)
+            valid_frame_count += 1
+
+            # 全局比对：找 similarity >= threshold 的前 3 人
+            result_A = ai_engine.find_top_matches(emb_q, all_docs, top_k=3, min_threshold=threshold)
+
+            # targets 比对
+            result_B = []
+            if target_docs:
+                target_threshold = threshold / 2
+                result_B = ai_engine.find_top_matches(
+                    emb_q, target_docs, top_k=len(target_docs), min_threshold=target_threshold
                 )
 
-        logger.info("[recognize] 优先persons比对未命中，转入全局比对...")
-    # 全局比对
-    logger.info("[recognize] 全局比对...")
-    all_docs = await person.get_embeddings_for_match(db)
+            # 合并去重（该帧的结果）
+            frame_match_dict = {}
 
-    if not all_docs:
-        logger.info("[recognize] (全局)数据库中没有有效人脸特征")
-        raise HTTPException(status_code=405, detail="[recognize] (全局)数据库中没有有效人脸特征,请先录入人脸数据")
+            for sim, doc in result_A:
+                number = doc.get("number")
+                if number:
+                    frame_match_dict[number] = (sim, doc, False)
 
-    # 2. 比对
-    best_sim, best_doc = ai_engine.find_best_match_embedding(emb_q, all_docs)
-    logger.info(f"[recognize] 全局匹配best结果: {best_doc.get('name')},{best_doc.get('number')},(Sim: {best_sim})")
-    threshold = request.threshold if request.threshold else THRESHOLD
+            for sim, doc in result_B:
+                number = doc.get("number")
+                if number:
+                    frame_match_dict[number] = (sim, doc, True)
 
-    # 3. 判断结果 (使用严格阈值)
-    if best_sim >= threshold:
-        logger.info(f"[recognize] 全局比对命中: {best_doc.get('name')} (Sim: {best_sim})")
-        return RecognizeResp.from_recognize(
-            matched=True,
-            has_face=True if bbox else False,
-            bbox=bbox,
-            best_sim=best_sim,
+            # 该帧的 top3（按相似度降序）
+            frame_matches = sorted(frame_match_dict.values(), key=lambda x: x[0], reverse=True)
+            frame_result['matches'] = [
+                {
+                    'id': str(m[1].get('_id')),
+                    'number': m[1].get('number'),
+                    'name': m[1].get('name'),
+                    'similarity': m[0],
+                    'is_target': m[2]
+                }
+                for m in frame_matches
+            ]
+
+            frames_results.append(frame_result)
+            logger.debug(f"[recognize/batch] 第{idx}帧: 识别到 {len(frame_matches)} 个匹配")
+
+        except Exception as e:
+            logger.error(f"[recognize/batch] 第{idx}帧处理失败: {e}")
+            frame_result['error'] = f"处理失败: {str(e)}"
+            frames_results.append(frame_result)
+
+    # 第二步：检查是否有有效帧
+    if valid_frame_count == 0:
+        logger.warning("[recognize/batch] 所有帧均未检测到有效人脸")
+        frames_info = [FrameInfo(
+            index=f['index'],
+            has_face=f['has_face'],
+            bbox=f['bbox'],
+            error=f['error']
+        ) for f in frames_results]
+
+        return BatchRecognizeResp(
+            total_frames=len(request.photos),
+            valid_frames=0,
             threshold=threshold,
-            reason=REASON_MAP["global"],
-            person_doc=best_doc
+            frames=frames_info,
+            match=None,
+            confidence=0.0,
+            message="所有帧均未检测到有效人脸"
         )
+
+    # 第三步：汇总所有帧的识别结果
+    # key: number, value: (max_similarity, doc, is_target_any, appearance_count)
+    aggregated_results = {}
+
+    for frame in frames_results:
+        for match in frame.get('matches', []):
+            number = match['number']
+            sim = match['similarity']
+            is_target = match['is_target']
+
+            if number in aggregated_results:
+                # 已存在：更新最高相似度、is_target（任一为true则为true）、出现次数
+                max_sim, doc_info, is_target_any, count = aggregated_results[number]
+                # 如果当前相似度更高，更新文档信息（保留更好匹配的完整信息）
+                if sim > max_sim:
+                    doc_info = {'id': match['id'], 'number': number, 'name': match['name']}
+                aggregated_results[number] = (
+                    max(max_sim, sim),  # 取最高相似度
+                    doc_info,  # 保留文档信息
+                    is_target_any or is_target,  # is_target 优先保留 true
+                    count + 1  # 出现次数+1
+                )
+            else:
+                # 首次出现
+                aggregated_results[number] = (
+                    sim,
+                    {'id': match['id'], 'number': number, 'name': match['name']},
+                    is_target,
+                    1  # 出现次数
+                )
+
+    # 第四步：按相似度降序排序，取 top3
+    final_matches = sorted(
+        aggregated_results.items(),
+        key=lambda x: x[1][0],  # 按最高相似度排序
+        reverse=True
+    )[:3]  # 只取前3
+
+    # 第五步：计算置信度
+    confidence = valid_frame_count / len(request.photos)
+
+    # 第六步：构建响应
+    frames_info = [FrameInfo(
+        index=f['index'],
+        has_face=f['has_face'],
+        bbox=f['bbox'],
+        error=f['error']
+    ) for f in frames_results]
+
+    if not final_matches:
+        logger.info("[recognize/batch] 未找到任何匹配")
+        return BatchRecognizeResp(
+            total_frames=len(request.photos),
+            valid_frames=valid_frame_count,
+            threshold=threshold,
+            frames=frames_info,
+            match=None,
+            confidence=confidence,
+            message=f"识别失败，使用{valid_frame_count}帧有效图片，但相似度均低于阈值"
+        )
+
+    # 构建 match 列表
+    match_items = []
+    for number, (max_sim, doc_info, is_target, count) in final_matches:
+        match_items.append(MatchItem(
+            id=doc_info.get('id', ''),  # 使用聚合结果中的 id
+            name=doc_info.get('name'),
+            number=number,
+            similarity=f"{max_sim * 100:.2f}%",
+            is_target=is_target
+        ))
+
+    # 构建消息
+    best_name = final_matches[0][1][1].get('name')
+    best_number = final_matches[0][0]
+    best_count = final_matches[0][1][3]
+
+    if targets:
+        target_count = sum(1 for _, (_, _, is_t, _) in final_matches if is_t)
+        message = f"识别成功，使用{valid_frame_count}帧有效图片，找到{len(final_matches)}位候选人，targets命中{target_count}位，最相似的是{best_name}_{best_number}（出现{best_count}次）"
     else:
-        logger.info(f"[recognize] 全局比对失败，最高分: {best_sim} 低于阈值: {threshold}")
-        return RecognizeResp.from_recognize(
-            matched=False,
-            has_face=True if bbox else False,
-            bbox=bbox,
-            best_sim=best_sim,
-            threshold=threshold,
-            reason="相似度低于阈值，与已知人脸库不匹配",
-            person_doc=best_doc
-        )
+        message = f"识别成功，使用{valid_frame_count}帧有效图片，找到{len(final_matches)}位候选人，最相似的是{best_name}_{best_number}（出现{best_count}次）"
+
+    logger.info(f"[recognize/batch] {message}，置信度: {confidence:.2f}")
+
+    return BatchRecognizeResp(
+        total_frames=len(request.photos),
+        valid_frames=valid_frame_count,
+        threshold=threshold,
+        frames=frames_info,
+        match=match_items,
+        confidence=confidence,
+        message=message
+    )
+    ##
+

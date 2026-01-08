@@ -5,7 +5,7 @@ from bson import ObjectId
 
 class PersonBase(BaseModel):
     name: str = None # 姓名
-    number: Optional[str] = None # 编号
+    number: Optional[str] = None
 
 class Person(PersonBase):
     id: Optional[str]  # 使用字符串类型存储 MongoDB 的 ObjectId

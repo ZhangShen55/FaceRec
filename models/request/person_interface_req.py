@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from app.models.schemas import PersonBase
+from typing import Optional
 
 """
 用于存放/persons接口的请求模型
@@ -11,6 +12,9 @@ class PersonFeatureRequest(BaseModel):
     name: str
     number: str
 
+class PersonsFeatureRequest(BaseModel):
+    persons: list[PersonFeatureRequest]
+
 
 class GetPersonListRequest(BaseModel):
     skip: int = 0 # 跳过数据
@@ -18,11 +22,20 @@ class GetPersonListRequest(BaseModel):
 
 
 class SearchPersonRequest(BaseModel):
-    name: str
-    number: str
+    name: Optional[str] = None
+    number: Optional[str] = None
 
 
 class DeletePersonRequest(BaseModel):
     id: str = None
     name: str = None
     number: str = None
+
+
+class DeletePersonByIdRequest(BaseModel):
+    """
+    按ID删除人物请求模型
+    - ID是唯一标识，不会出现误删
+    """
+    id: str
+

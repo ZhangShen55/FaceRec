@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from pydantic import BaseModel
 from app.models.schemas import PersonBase
@@ -21,6 +21,9 @@ class PersonFeatureResponse(BaseModel):
     photo_path: str
     tip: str
 
+class PersonsFeatureResponse(BaseModel):
+    # 人脸特征响应列表
+    persons: list[PersonFeatureResponse]
 
 # PersonRead 是返回给前端的模型
 class PersonRead(BaseModel):
@@ -28,3 +31,8 @@ class PersonRead(BaseModel):
     name: str
     number: Optional[str] = None
     photo_path: Optional[str] = None
+    bbox: Optional[str] = None  # 人脸检测框（格式: x,y,w,h，如 "100,150,200,250"）
+
+
+class SearchPersonResponse(BaseModel):
+    persons: List[Dict[str, Any]]

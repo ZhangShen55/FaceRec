@@ -20,3 +20,6 @@ dlib
 # GPU版FastDeploy（如要CPU版可改成 fastdeploy-python==1.0.7）
 fastdeploy-gpu-python==1.0.7
 # -f https://www.paddlepaddle.org.cn/whl/fastdeploy.html
+
+# 统计
+psutil

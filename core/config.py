@@ -53,6 +53,10 @@ class FeatureImageSettings(BaseModel):
     max_face_hw: int = 300
     min_face_hw: int = 40
 
+class StatsSettings(BaseModel):
+    retention_days: int = 7  # 详细日志保留天数
+    hourly_retention_days: int = 30  # 按小时聚合数据保留天数
+
 class Settings(BaseModel):
     db: DBSettings
     face: FaceSettings
@@ -61,6 +65,7 @@ class Settings(BaseModel):
     frontlogin: FrontLoginSettings
     feature_image: FeatureImageSettings
     logger: LoggerSettings
+    stats: StatsSettings
 
 def load_config():
     logger.debug(f"Loading config from {config_path}")
@@ -79,7 +84,8 @@ def load_config():
         gpu=GpuSettings(**config_data["gpu"]),
         frontlogin=FrontLoginSettings(**config_data["frontlogin"]),
         feature_image=FeatureImageSettings(**config_data["image"]),
-        logger=LoggerSettings(**config_data["logger"])
+        logger=LoggerSettings(**config_data["logger"]),
+        stats=StatsSettings(**config_data.get("stats", {}))  # 兼容旧配置
     )
 
 

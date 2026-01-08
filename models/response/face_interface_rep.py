@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
 class BBox(BaseModel):
@@ -9,70 +9,33 @@ class BBox(BaseModel):
     h: int
 
 class MatchItem(BaseModel):
-    reason: str
     id: str
     name: Optional[str] = None
     number: Optional[str] = None
     similarity: str
+    is_target: bool = False  # 是否是 targets 中指定的人物
 
 class RecognizeResp(BaseModel):
     has_face: bool
     bbox: Optional[BBox] = None
     threshold: float
-    match: Optional[MatchItem] = None
+    match: Optional[List[MatchItem]] = None  # 改为列表，支持多个匹配结果
     message: str
 
-    # 工厂方法
-    @classmethod
-    def from_recognize(
-        cls,
-        *,
-        matched: bool,
-        has_face: bool,
-        bbox: Optional[Dict[str, Any]] = None,
-        best_sim: float,
-        threshold: float,
-        reason: str = "",
-        person_doc: Optional[Dict[str, Any]] = None,
-    ) -> "RecognizeResp":
-        """统一构造器，业务层直接 RecognizeResp.from_recognize(...) 即可"""
-        if not has_face:
-            return cls(
-                has_face=False,
-                bbox=None,
-                threshold=threshold,
-                match=None,
-                message="图像中未检测到人脸，请重新捕捉人脸",
-            )
+class FrameInfo(BaseModel):
+    """单帧图片的处理信息"""
+    index: int
+    has_face: bool
+    bbox: Optional[BBox] = None
+    error: Optional[str] = None
 
-        if not matched:
-            return cls(
-                has_face=True,
-                bbox=BBox(**bbox) if bbox else None,
-                threshold=threshold,
-                match=None,
-                message="匹配失败，未能够匹配到目标人物",
-            )
+class BatchRecognizeResp(BaseModel):
+    """批量识别响应（融合多帧结果）"""
+    total_frames: int  # 总帧数
+    valid_frames: int  # 有效帧数（检测到人脸的）
+    threshold: float
+    frames: List[FrameInfo]  # 每一帧的处理信息
+    match: Optional[List[MatchItem]] = None  # 融合后的最终匹配结果
+    confidence: float  # 综合置信度（有效帧数 / 总帧数）
+    message: str
 
-        if best_sim >= threshold:
-            return cls(
-                has_face=True,
-                bbox=BBox(**bbox) if bbox else None,
-                threshold=threshold,
-                match=MatchItem(
-                    reason=reason,
-                    id=str(person_doc["_id"]),
-                    name=person_doc.get("name"),
-                    number=person_doc.get("number"),
-                    similarity=f"{best_sim * 100:.2f}%",
-                ),
-                message=f"匹配成功，检测相似度:{best_sim * 100:.2f}% >= 阈值{threshold * 100:.2f}%",
-            )
-
-        return cls(
-            has_face=True,
-            bbox=BBox(**bbox) if bbox else None,
-            threshold=threshold,
-            match=None,
-            message=f"匹配失败，检测相似度:{best_sim * 100:.2f}% < 阈值{threshold * 100:.2f}%",
-        )
