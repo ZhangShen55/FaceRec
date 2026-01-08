@@ -1,19 +1,40 @@
-*.pyc
-__pycache__
-*.log
-*.db
-*.dat
-*.onnx
-# 文件名中包含copy的python都不要上传到git
-*copy*.py
-# 忽略所有.idea目录
-.idea/
-# 文件名中包含bak的python都不要上传到git
-*bak*.py
-# 忽略所有.vscode目录
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDEs
 .vscode/
-# detections目录下的文件不要上传到git
-detections/*
-person_photos/*
-*.md
+.idea/
+*.swp
+
+# Logs
+logs/
+*.log
+
+# Media files
+media/person_photos/
+media/detections/
+
+# AI Models
+ai_models/*.onnx
+ai_models/*.dat
+
+# Temporary files
 tmp/
+*.tmp
+*.bak
+
+# OS
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
