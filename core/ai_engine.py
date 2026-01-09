@@ -51,6 +51,9 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
     """
     真实的dlib计算的函数的，运行在子进程中。
     """
+    import time
+    t_start = time.time()
+
     # 使用子进程局部的模型
     global _mp_detector, _mp_predictor
     tip = "人脸特征像素正常，可以使用" # 图像质量提示信息
@@ -59,10 +62,17 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
         return None, None, None
 
     # 转灰度cpu计算
+    t0 = time.time()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # 1. 检测人脸cpu计算
-    faces = _mp_detector(gray, 1)
+    logger.info(f"[性能] 灰度转换耗时: {(time.time()-t0)*1000:.2f}ms")
+
+    # 1. 检测人脸cpu计算（upsample=0 避免无人脸时过多上采样导致响应缓慢）
+    t1 = time.time()
+    faces = _mp_detector(gray, 0)
+    logger.info(f"[性能] 人脸检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
+
     if not faces:
+        logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
         return None, None, None
 
     # 选择最大人脸

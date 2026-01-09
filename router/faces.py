@@ -22,47 +22,36 @@ REC_MIN_FACE_HW = int(settings.face.rec_min_face_hw)
 
 @router.post("/recognize", response_model=RecognizeResp)
 async def recognize_face_api(request: PersonRecognizeRequest = Body(..., description="人脸识别请求")):
+    import time
+    t_total_start = time.time()
+
     logger.debug(f"[recognize] 接收到请求参数：{request}")
 
     # 1. 确定阈值
     threshold = request.threshold if request.threshold else THRESHOLD
     targets = request.targets if request.targets else []
 
-    # 2. 预加载数据库数据（避免每帧都查询）
-    # logger.info("[recognize] 预加载数据库数据...")
-    all_docs = await person.get_embeddings_for_match(db)
-
-    if not all_docs:
-        logger.info("[recognize] 数据库中没有有效人脸特征")
-        return RecognizeResp(
-            has_face=True,
-            bbox=None,
-            threshold=threshold,
-            match=None,
-            message="匹配失败，未能够匹配到目标人物"
-        )
-
-    target_docs = []
-    if targets:
-        target_docs = await person.get_targets_embeddings(db, targets)
-        logger.info(f"[recognize] targets 查询到 {len(target_docs)} 个候选人")
-
-    # 3. 解析图片数据
+    # 2. 解析图片数据
+    t_step = time.time()
     image_data, filename = await base64_to_mat(request.photo)
+    logger.info(f"[性能] 解析图片耗时: {(time.time()-t_step)*1000:.2f}ms")
 
     if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
         logger.error(f"[recognize] 未接收到有效图片数据或图像数据存在异常")
         raise HTTPException(status_code=400, detail="[recognize] 未接收到有效图片数据或图像数据存在异常")
 
-    # 4. 检测人脸
+    # 3. 检测人脸
+    t_step = time.time()
     try:
         face_image, bbox, _ = await ai_engine.detect_and_extract_face(image_data)
     except Exception as e:
         logger.error(f"[recognize] 人脸检测服务内部错误: {e}")
         raise HTTPException(status_code=500, detail="[recognize] 人脸检测服务内部错误")
+    logger.info(f"[性能] 人脸检测总耗时(含进程通信): {(time.time()-t_step)*1000:.2f}ms")
 
     if face_image is None:
         logger.info(f"[recognize] 未检测到有效人脸")
+        logger.info(f"[性能] 总请求耗时: {(time.time()-t_total_start)*1000:.2f}ms")
         return RecognizeResp(
             has_face=False,
             bbox=None,
@@ -71,7 +60,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             message="图像中未检测到人脸，请重新捕捉人脸"
         )
 
-    # 5. 验证人脸尺寸
+    # 4. 验证人脸尺寸
     if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
         logger.info(f"[recognize] 检测到的人脸过小: {face_image.shape[0]}x{face_image.shape[1]}px，小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px")
         return RecognizeResp(
@@ -81,6 +70,25 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             match=None,
             message=f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别"
         )
+
+    # 5. 预加载数据库数据（只有检测到人脸后才查询数据库，避免浪费）
+    # logger.info("[recognize] 预加载数据库数据...")
+    all_docs = await person.get_embeddings_for_match(db)
+
+    if not all_docs:
+        logger.info("[recognize] 数据库中没有有效人脸特征")
+        return RecognizeResp(
+            has_face=True,
+            bbox=BBox(**bbox) if bbox else None,
+            threshold=threshold,
+            match=None,
+            message="匹配失败，未能够匹配到目标人物"
+        )
+
+    target_docs = []
+    if targets:
+        target_docs = await person.get_targets_embeddings(db, targets)
+        logger.info(f"[recognize] targets 查询到 {len(target_docs)} 个候选人")
 
     # 6. 提取特征
     try:
@@ -392,6 +400,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
     best_name = final_matches[0][1][1].get('name')
     best_number = final_matches[0][0]
     best_count = final_matches[0][1][3]
+    best_similarity = final_matches[0][1][0]  # 最高相似度
 
     if targets:
         target_count = sum(1 for _, (_, _, is_t, _) in final_matches if is_t)
@@ -399,7 +408,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
     else:
         message = f"识别成功，使用{valid_frame_count}帧有效图片，找到{len(final_matches)}位候选人，最相似的是{best_name}_{best_number}（出现{best_count}次）"
 
-    logger.info(f"[recognize/batch] {message}，置信度: {confidence:.2f}")
+    logger.info(f"[recognize/batch] {message}，最高相似度: {best_similarity * 100:.2f}%")
 
     return BatchRecognizeResp(
         total_frames=len(request.photos),
@@ -407,7 +416,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
         threshold=threshold,
         frames=frames_info,
         match=match_items,
-        confidence=confidence,
+        # confidence=confidence,
         message=message
     )
     ##

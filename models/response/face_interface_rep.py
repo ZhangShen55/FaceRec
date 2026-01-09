@@ -36,6 +36,6 @@ class BatchRecognizeResp(BaseModel):
     threshold: float
     frames: List[FrameInfo]  # 每一帧的处理信息
     match: Optional[List[MatchItem]] = None  # 融合后的最终匹配结果
-    confidence: float  # 综合置信度（有效帧数 / 总帧数）
+    # confidence: float  # 综合置信度（有效帧数 / 总帧数）
     message: str
 
