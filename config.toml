@@ -27,7 +27,7 @@ max_face_hw = 999  # （提取特征阶段）最大人脸高度和宽度
 min_face_hw = 50  # 最小人脸高度和宽度
 [logger]
 level = "INFO"  # 日志级别
-filename = "/app/logs/facerecapi.log"  # 日志文件路径
+log_path = "/app/logs/facere_service.log"  # 日志文件路径
 
 [stats]
 # 统计数据保留天数（自动清理超过该天数的数据）

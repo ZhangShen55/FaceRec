@@ -2,11 +2,13 @@ import logging
 import os
 import sys
 import uuid
+from pathlib import Path
 from logging.config import dictConfig
 from contextvars import ContextVar
+from app.core.config import settings
 
-LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_DIR = os.getenv("LOG_DIR", "/app/logs/facerecapi.log")
+LEVEL = settings.logger.level
+LOG_PATH = settings.logger.log_path
 
 # 每个请求的 request_id（中间件里设置）
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
@@ -19,8 +21,10 @@ class RequestIdFilter(logging.Filter):
 def setup_logging() -> None:
     """主进程初始化日志"""
     level = LEVEL.upper()
-    filename = LOG_DIR
-
+    filename = LOG_PATH
+    if filename:
+        # 初始化处理程序之前，确保日志目录存在
+        Path(filename).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     dictConfig({
         "version": 1,
         "disable_existing_loggers": False,
@@ -55,6 +59,7 @@ def setup_logging() -> None:
             "log_file": {
                 "class": "logging.handlers.RotatingFileHandler",
                 "filename": filename,
+                "mode": "w",
                 "maxBytes": 50 * 1024 * 1024,
                 "backupCount": 5,
                 "filters": ["request_id"],

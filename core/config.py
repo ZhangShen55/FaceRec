@@ -1,9 +1,10 @@
 from pydantic import BaseModel, computed_field
 from pathlib import Path
 import tomli
-from app.core.logger import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
+logger.level = logging.DEBUG
 
 config_path = Path(__file__).resolve().parent.parent / "config.toml"
 
@@ -14,7 +15,7 @@ class DBSettings(BaseModel):
     port: str
     database: str
     auth_source: str
-    limit: int = 10000 # 限制返回的结果条数
+    limit: int = 10000
 
     @computed_field
     def url(self) -> str:
@@ -39,10 +40,9 @@ class FrontLoginSettings(BaseModel):
     username: str
     password: str
 
-
 class LoggerSettings(BaseModel):
-    level: str
-    filename: str = "face_recognizer.log"
+    level: str = "INFO"
+    log_path: str = "/app/logs/facerec.log"
 
 class FeatureImageSettings(BaseModel):
     max_feature_image_width_px: int = 720
