@@ -7,11 +7,13 @@
 ### 1. shape_predictor_68_face_landmarks.dat
 - **用途**: Dlib 68点人脸关键点检测模型
 - **下载**: [http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2](http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2)
+- **网盘下载**: https://pan.baidu.com/s/1-pr9VcAZk1Xd4LLam9c-jw?pwd=5555
 - **大小**: ~95 MB (解压后)
 
 ### 2. ms1mv3_arcface_r100.onnx
 - **用途**: ArcFace 人脸特征提取模型 (ONNX格式)
 - **下载**: 从官方渠道获取或联系项目维护者
+- **网盘下载**: https://pan.baidu.com/s/1-pr9VcAZk1Xd4LLam9c-jw?pwd=5555
 - **大小**: ~250 MB
 
 ## 安装说明
@@ -32,6 +34,5 @@ ai_models/
 
 ## 注意事项
 
-- 模型文件较大，不建议提交到 Git 仓库
-- 可以使用 Git LFS 管理大文件
-- 或者在 CI/CD 流程中自动下载
+- 请严格上述文件位置存放
+- 容器化部署，可通过外部挂载、或者打包到容器当中，两者都可以
