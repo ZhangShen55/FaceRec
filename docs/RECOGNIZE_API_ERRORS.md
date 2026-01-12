@@ -140,7 +140,6 @@
       "is_target": false
     }
   ],
-  "confidence": 0.5,
   "message": "识别成功，使用1帧有效图片，找到1位候选人，最相似的是张三_T001（出现1次）"
 }
 ```
@@ -208,7 +207,7 @@ async function recognizeFace(photo, targets = [], threshold = null) {
 
 ## 📝 注意事项
 
-1. `targets` 目前只接收 **人员编号列表**，不接收 `{name, number}` 结构。
+1. `targets` 目前只接收 **人员编号列表**，只接收 `{number}` 结构。
 2. `targets` 命中时使用 **`threshold / 2`** 作为候选阈值；响应中的 `threshold` 仍是全局阈值。
 3. `match` 列表按相似度降序排列，`match[0]` 即最相似结果。
 4. `similarity` 为百分比字符串，便于直接展示。
@@ -227,7 +226,4 @@ async function recognizeFace(photo, targets = [], threshold = null) {
 
 ## 📞 技术支持
 
-如遇问题，请提供以下信息：
-- 请求的完整 JSON
-- 返回的 HTTP 状态码和响应体
-- 后端日志中的 `[recognize]` 相关日志
+- 邮箱：<seonzheung@gmail.com>
