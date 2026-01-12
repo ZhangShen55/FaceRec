@@ -69,20 +69,70 @@ async def delete_person(db, person_id: str):
 
 async def delete_persons_by_name(db, name_keyword: str):
     """
-    根据姓名模糊删除人物
+    根据姓名模糊删除人物,返回删除数量和被删除的人物信息
     """
-    # MongoDB 使用正则表达式进行模糊查询
+    # 先查询要删除的人物信息
+    persons = await db["persons"].find(
+        {"name": {"$regex": name_keyword, "$options": "i"}},
+        {"_id": 1, "name": 1, "number": 1}
+    ).to_list(length=None)
+
+    if not persons:
+        return 0, []
+
+    # 执行删除
     result = await db["persons"].delete_many({"name": {"$regex": name_keyword, "$options": "i"}})
-    return result.deleted_count
+
+    # 返回删除数量和人物信息列表
+    info_list = [{"id": str(p.get("_id")), "number": p.get("number"), "name": p.get("name")} for p in persons]
+    return result.deleted_count, info_list
+
+async def delete_person_by_number(db, number: str):
+    """
+    根据 number 精确删除人物,返回删除数量和被删除的人物信息
+    """
+    # 先查询要删除的人物信息
+    person = await db["persons"].find_one(
+        {"number": number},
+        {"_id": 1, "name": 1, "number": 1}
+    )
+
+    if not person:
+        return 0, []
+
+    # 执行删除
+    result = await db["persons"].delete_one({"number": number})
+
+    if result.deleted_count == 0:
+        return 0, []
+
+    # 返回删除数量和人物信息列表(保持与 delete_persons_by_name 一致)
+    info_list = [{"id": str(person.get("_id")), "number": person.get("number"), "name": person.get("name")}]
+    return 1, info_list
+
 
 async def delete_person_by_id(db, id: str):
     """
-    根据ID删除人物
+    根据ID删除人物,返回删除数量和被删除的人物信息
     """
+    # 先查询要删除的人物信息
+    person = await db["persons"].find_one(
+        {"_id": ObjectId(id)},
+        {"_id": 1, "name": 1, "number": 1}
+    )
+
+    if not person:
+        return 0, []
+
+    # 执行删除
     result = await db["persons"].delete_one({"_id": ObjectId(id)})
+
     if result.deleted_count == 0:
-        return None
-    return {"_id": id}
+        return 0, []
+
+    # 返回删除数量和人物信息列表(保持与其他删除方法一致)
+    info_list = [{"id": str(person.get("_id")), "number": person.get("number"), "name": person.get("name")}]
+    return 1, info_list
 
 
 async def delete_persons_by_name_exact(db, name: str):
