@@ -93,3 +93,37 @@ if __name__ == "__main__":
 
     # cd app
     # PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003  --env-file .env --workers 1
+
+    # ============ 后台启动命令 ============
+    # conda activate facerecapi
+    # cd /root/workspace/FaceRecAPI_DEV/app
+    # nohup env PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003 --env-file .env --workers 1 > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.log 2>&1 & echo $! > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid
+
+    # ============ 查看运行状态 ============
+    # ps aux | grep "facerec_server_uvicorn app.main:app"
+    # tail -f /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.log
+
+    # ============ 关闭服务 ============
+    # 方法1: 使用 PID 文件关闭（推荐，带进程检查）
+    # PID_FILE=/root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid
+    # if [ -f $PID_FILE ]; then
+    #     PID=$(cat $PID_FILE)
+    #     if ps -p $PID > /dev/null 2>&1; then
+    #         kill $PID && echo "进程 $PID 已终止"
+    #     else
+    #         echo "进程 $PID 不存在，可能已经停止"
+    #     fi
+    #     rm $PID_FILE
+    # else
+    #     echo "PID 文件不存在"
+    # fi
+
+    # 方法2: 简单关闭（不检查进程是否存在）
+    # kill $(cat /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid) 2>/dev/null
+    # rm /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid 2>/dev/null
+
+    # 方法3: 查找进程并关闭
+    # ps aux | grep "facerec_server_uvicorn app.main:app" | grep -v grep | awk '{print $2}' | xargs kill
+
+    # 方法4: 强制关闭 (慎用)
+    # ps aux | grep "facerec_server_uvicorn app.main:app" | grep -v grep | awk '{print $2}' | xargs kill -9
