@@ -68,7 +68,7 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
 
     # 1. 检测人脸cpu计算（upsample=0 避免无人脸时过多上采样导致响应缓慢）
     t1 = time.time()
-    faces = _mp_detector(gray, 0)
+    faces = _mp_detector(gray, 1)
     logger.info(f"[性能] 人脸检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
 
     if not faces:

@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.database import db
 from app.models.request.face_interface_req import PersonRecognizeRequest, BatchRecognizeRequest
 from app.models.response.face_interface_rep import RecognizeResp, BBox, MatchItem, BatchRecognizeResp, FrameInfo
+from app.models.api_response import StatusCode, ApiResponse
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,7 +21,7 @@ THRESHOLD = settings.face.threshold
 CANDIDATE_THRESHOLD = settings.face.candidate_threshold
 REC_MIN_FACE_HW = int(settings.face.rec_min_face_hw)
 
-@router.post("/recognize", response_model=RecognizeResp)
+@router.post("/recognize", response_model=ApiResponse)
 async def recognize_face_api(request: PersonRecognizeRequest = Body(..., description="人脸识别请求")):
     import time
     t_total_start = time.time()
@@ -33,12 +34,30 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     # 2. 解析图片数据
     t_step = time.time()
-    image_data, filename = await base64_to_mat(request.photo)
+    try:
+        image_data, filename = await base64_to_mat(request.photo)
+    except HTTPException as e:
+        # base64 解码失败（HTTPException 由 base64_to_mat 抛出）
+        logger.error(f"[recognize] 图片解析失败: {e.detail}")
+        # 判断是 base64 解码错误还是图片格式错误
+        if "base64" in str(e.detail).lower() or "decode" in str(e.detail).lower():
+            return ApiResponse.error(
+                status_code=StatusCode.BASE64_DECODE_ERROR,
+                message=str(e.detail)
+            )
+        else:
+            return ApiResponse.error(
+                status_code=StatusCode.INVALID_IMAGE_FORMAT,
+                message=str(e.detail)
+            )
     logger.info(f"[性能] 解析图片耗时: {(time.time()-t_step)*1000:.2f}ms")
 
     if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
         logger.error(f"[recognize] 未接收到有效图片数据或图像数据存在异常")
-        raise HTTPException(status_code=400, detail="[recognize] 未接收到有效图片数据或图像数据存在异常")
+        return ApiResponse.error(
+            status_code=StatusCode.INVALID_IMAGE_DATA,
+            message="未接收到有效图片数据或图像数据存在异常"
+        )
 
     # 3. 检测人脸
     t_step = time.time()
@@ -46,29 +65,33 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
         face_image, bbox, _ = await ai_engine.detect_and_extract_face(image_data)
     except Exception as e:
         logger.error(f"[recognize] 人脸检测服务内部错误: {e}")
-        raise HTTPException(status_code=500, detail="[recognize] 人脸检测服务内部错误")
+        return ApiResponse.error(
+            status_code=StatusCode.FACE_DETECTION_ERROR,
+            message=f"人脸检测服务内部错误: {str(e)}"
+        )
     logger.info(f"[性能] 人脸检测总耗时(含进程通信): {(time.time()-t_step)*1000:.2f}ms")
 
     if face_image is None:
         logger.info(f"[recognize] 未检测到有效人脸")
         logger.info(f"[性能] 总请求耗时: {(time.time()-t_total_start)*1000:.2f}ms")
-        return RecognizeResp(
-            has_face=False,
-            bbox=None,
-            threshold=threshold,
-            match=None,
+        return ApiResponse.error(
+            status_code=StatusCode.NO_FACE_DETECTED,
             message="图像中未检测到人脸，请重新捕捉人脸"
         )
 
     # 4. 验证人脸尺寸
     if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
         logger.info(f"[recognize] 检测到的人脸过小: {face_image.shape[0]}x{face_image.shape[1]}px，小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px")
-        return RecognizeResp(
-            has_face=True,
-            bbox=BBox(**bbox) if bbox else None,
-            threshold=threshold,
-            match=None,
-            message=f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别"
+        return ApiResponse.error(
+            status_code=StatusCode.FACE_TOO_SMALL,
+            message=f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别",
+            data={
+                "has_face": True,
+                "bbox": BBox(**bbox).model_dump() if bbox else None,
+                "threshold": threshold,
+                "match": None,
+                "message": f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别"
+            }
         )
 
     # 5. 预加载数据库数据（只有检测到人脸后才查询数据库，避免浪费）
@@ -77,12 +100,16 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     if not all_docs:
         logger.info("[recognize] 数据库中没有有效人脸特征")
-        return RecognizeResp(
-            has_face=True,
-            bbox=BBox(**bbox) if bbox else None,
-            threshold=threshold,
-            match=None,
-            message="匹配失败，未能够匹配到目标人物"
+        return ApiResponse.error(
+            status_code=StatusCode.DB_EMPTY,
+            message="数据库为空，请先录入人员信息",
+            data={
+                "has_face": True,
+                "bbox": BBox(**bbox).model_dump() if bbox else None,
+                "threshold": threshold,
+                "match": None,
+                "message": "数据库为空，请先录入人员信息"
+            }
         )
 
     target_docs = []
@@ -95,7 +122,10 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
         emb_q = await ai_engine.get_embedding(face_image)
     except Exception as e:
         logger.error(f"[recognize] 人脸特征提取失败: {e}")
-        raise HTTPException(status_code=500, detail="[recognize] 人脸特征提取失败")
+        return ApiResponse.error(
+            status_code=StatusCode.FEATURE_EXTRACT_ERROR,
+            message=f"人脸特征提取失败: {str(e)}"
+        )
 
     # 7. 全局比对：找 similarity >= threshold 的前 3 人
     logger.info("[recognize] 开始全局比对...")
@@ -135,12 +165,16 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
     # 11. 构建响应
     if not final_matches:
         logger.info("[recognize] 未找到任何匹配")
-        return RecognizeResp(
-            has_face=True,
-            bbox=BBox(**bbox) if bbox else None,
-            threshold=threshold,
-            match=None,
-            message="匹配失败，未能够匹配到目标人物"
+        return ApiResponse.error(
+            status_code=StatusCode.NO_MATCH_FOUND,
+            message="未找到匹配的人物（相似度低于阈值）",
+            data={
+                "has_face": True,
+                "bbox": BBox(**bbox).model_dump() if bbox else None,
+                "threshold": threshold,
+                "match": None,
+                "message": "未找到匹配的人物（相似度低于阈值）"
+            }
         )
 
     # 12. 构建 match 列表
@@ -169,16 +203,19 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     logger.info(f"[recognize] {message}")
 
-    return RecognizeResp(
-        has_face=True,
-        bbox=BBox(**bbox) if bbox else None,
-        threshold=threshold,
-        match=match_items,
-        message=message
+    return ApiResponse.success(
+        data={
+            "has_face": True,
+            "bbox": BBox(**bbox).model_dump() if bbox else None,
+            "threshold": threshold,
+            "match": [m.model_dump() for m in match_items],
+            "message": message
+        },
+        message="识别成功"
     )
 
 
-@router.post("/recognize/batch", response_model=BatchRecognizeResp)
+@router.post("/recognize/batch", response_model=ApiResponse)
 async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., description="批量人脸识别请求（多帧独立识别）")):
     """
     批量识别接口（多帧独立识别，取最优结果）
@@ -192,20 +229,26 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
     targets = request.targets if request.targets else []
 
     if not request.photos:
-        raise HTTPException(status_code=400, detail="photos 列表不能为空")
+        return ApiResponse.error(
+            status_code=StatusCode.BAD_REQUEST,
+            message="photos 列表不能为空"
+        )
 
     # 预加载数据库数据（避免每帧都查询）
     all_docs = await person.get_embeddings_for_match(db)
     if not all_docs:
         logger.warning("[recognize/batch] 数据库中没有有效人脸特征")
-        return BatchRecognizeResp(
-            total_frames=len(request.photos),
-            valid_frames=0,
-            threshold=threshold,
-            frames=[],
-            match=None,
-            confidence=0.0,
-            message="数据库中暂无人脸数据，请先录入"
+        return ApiResponse.error(
+            status_code=StatusCode.DB_EMPTY,
+            message="数据库为空，请先录入人员信息",
+            data={
+                "total_frames": len(request.photos),
+                "valid_frames": 0,
+                "threshold": threshold,
+                "frames": [],
+                "match": None,
+                "message": "数据库中暂无人脸数据，请先录入"
+            }
         )
 
     target_docs = []
@@ -314,14 +357,17 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
             error=f['error']
         ) for f in frames_results]
 
-        return BatchRecognizeResp(
-            total_frames=len(request.photos),
-            valid_frames=0,
-            threshold=threshold,
-            frames=frames_info,
-            match=None,
-            confidence=0.0,
-            message="所有帧均未检测到有效人脸"
+        return ApiResponse.error(
+            status_code=StatusCode.NO_FACE_DETECTED,
+            message="所有帧均未检测到有效人脸",
+            data={
+                "total_frames": len(request.photos),
+                "valid_frames": 0,
+                "threshold": threshold,
+                "frames": [f.model_dump() for f in frames_info],
+                "match": None,
+                "message": "所有帧均未检测到有效人脸"
+            }
         )
 
     # 第三步：汇总所有帧的识别结果
@@ -375,14 +421,17 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
 
     if not final_matches:
         logger.info("[recognize/batch] 未找到任何匹配")
-        return BatchRecognizeResp(
-            total_frames=len(request.photos),
-            valid_frames=valid_frame_count,
-            threshold=threshold,
-            frames=frames_info,
-            match=None,
-            confidence=confidence,
-            message=f"识别失败，使用{valid_frame_count}帧有效图片，但相似度均低于阈值"
+        return ApiResponse.error(
+            status_code=StatusCode.NO_MATCH_FOUND,
+            message=f"识别失败，使用{valid_frame_count}帧有效图片，但相似度均低于阈值",
+            data={
+                "total_frames": len(request.photos),
+                "valid_frames": valid_frame_count,
+                "threshold": threshold,
+                "frames": [f.model_dump() for f in frames_info],
+                "match": None,
+                "message": f"识别失败，使用{valid_frame_count}帧有效图片，但相似度均低于阈值"
+            }
         )
 
     # 构建 match 列表
@@ -410,14 +459,16 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
 
     logger.info(f"[recognize/batch] {message}，最高相似度: {best_similarity * 100:.2f}%")
 
-    return BatchRecognizeResp(
-        total_frames=len(request.photos),
-        valid_frames=valid_frame_count,
-        threshold=threshold,
-        frames=frames_info,
-        match=match_items,
-        # confidence=confidence,
-        message=message
+    return ApiResponse.success(
+        data={
+            "total_frames": len(request.photos),
+            "valid_frames": valid_frame_count,
+            "threshold": threshold,
+            "frames": [f.model_dump() for f in frames_info],
+            "match": [m.model_dump() for m in match_items],
+            "message": message
+        },
+        message="批量识别成功"
     )
     ##
 
