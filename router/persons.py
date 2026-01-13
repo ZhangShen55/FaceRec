@@ -170,7 +170,7 @@ async def create_person_api(
 
 @router.post("/batch", response_model=ApiResponse)
 async def create_persons_batch_api(
-        request: PersonsFeatureRequest = Body(..., description="批量人脸特征录入请求体")
+        request: PersonsBatchFeatureRequest = Body(..., description="批量人脸特征录入请求体")
 ):
     """
     批量上传人物特征接口
@@ -188,6 +188,46 @@ async def create_persons_batch_api(
 
     for idx, person_req in enumerate(request.persons):
         try:
+            # 手动验证必填参数
+            if not person_req.name or not person_req.name.strip():
+                error_msg = f"第{idx+1}个人物: 缺少name参数"
+                logger.error(f"[/persons/batch] {error_msg}")
+                failed_records.append(error_msg)
+                results.append(PersonFeatureResponse(
+                    id="",
+                    name=person_req.name if hasattr(person_req, 'name') else "",
+                    number=person_req.number if hasattr(person_req, 'number') else "",
+                    photo_path="",
+                    tip=f"错误: 缺少name参数"
+                ))
+                continue
+
+            if not person_req.number or not person_req.number.strip():
+                error_msg = f"第{idx+1}个人物({person_req.name}): 缺少number参数"
+                logger.error(f"[/persons/batch] {error_msg}")
+                failed_records.append(error_msg)
+                results.append(PersonFeatureResponse(
+                    id="",
+                    name=person_req.name,
+                    number=person_req.number if hasattr(person_req, 'number') else "",
+                    photo_path="",
+                    tip=f"错误: 缺少number参数"
+                ))
+                continue
+
+            if not person_req.photo or not person_req.photo.strip():
+                error_msg = f"第{idx+1}个人物({person_req.name}_{person_req.number}): 缺少photo参数"
+                logger.error(f"[/persons/batch] {error_msg}")
+                failed_records.append(error_msg)
+                results.append(PersonFeatureResponse(
+                    id="",
+                    name=person_req.name,
+                    number=person_req.number,
+                    photo_path="",
+                    tip=f"错误: 缺少photo参数"
+                ))
+                continue
+
             # 解析图片数据，捕获 HTTPException
             try:
                 image_data, filename = await base64_to_mat(person_req.photo)

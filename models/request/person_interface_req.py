@@ -37,6 +37,17 @@ class PersonsFeatureRequest(BaseModel):
     persons: list[PersonFeatureRequest]
 
 
+class PersonBatchFeatureRequest(BaseModel):
+    """批量接口专用模型 - 不使用field_validator，在循环中手动验证"""
+    photo: str
+    name: str
+    number: str
+
+
+class PersonsBatchFeatureRequest(BaseModel):
+    persons: list[PersonBatchFeatureRequest]
+
+
 class GetPersonListRequest(BaseModel):
     skip: int = 0 # 跳过数据
     limit: int = 100 # 默认返回100条数据
