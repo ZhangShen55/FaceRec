@@ -4,8 +4,10 @@ import numpy as np
 from typing import List
 from pathlib import Path
 from bson.binary import Binary
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
+from fastapi.exceptions import RequestValidationError
 from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import ValidationError
 
 from app.core.database import db
 from app.core.database import get_session
@@ -18,6 +20,7 @@ from app.core.logger import get_logger
 from app.core import ai_engine
 from app.models.request.person_interface_req import *
 from app.models.response.person_interface_rep import PersonFeatureResponse, PersonRead, PersonsFeatureResponse, SearchPersonResponse
+from app.models.api_response import StatusCode, ApiResponse
 
 
 logger = get_logger(__name__)
@@ -27,7 +30,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MIN_FEATURE_IMAGE_HEIGHT_PX = int(settings.feature_image.min_feature_image_height_px)
 MIN_FEATURE_IMAGE_WIDTH_PX = int(settings.feature_image.min_feature_image_width_px)
 
-@router.post("",response_model=PersonFeatureResponse)
+@router.post("", response_model=ApiResponse)
 async def create_person_api(
         request: PersonFeatureRequest = Body(..., description="人脸特征录入请求体")
 ):
@@ -35,31 +38,49 @@ async def create_person_api(
     单个上传人物特征接口
     - 如果 number 已存在，则更新该人物信息
     - 如果 number 不存在，则创建新人物
+    - HTTP 状态码永远是 200，通过 status_code 字段判断结果
     """
     try:
         # 1. 解析图片数据
-        image_data, filename = await base64_to_mat(request.photo)
+        try:
+            image_data, filename = await base64_to_mat(request.photo)
+        except HTTPException as e:
+            # base64 解码失败等客户端错误
+            logger.error(f"[/persons] 图片解析失败: {e.detail}")
+            return ApiResponse.error(
+                status_code=StatusCode.BAD_REQUEST,
+                message=str(e.detail)
+            )
 
         if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
             logger.error(f"[/persons] 未接收到有效图片数据或图像数据存在异常")
-            raise HTTPException(status_code=400, detail="未接收到有效图片数据或图像数据存在异常")
+            return ApiResponse.error(
+                status_code=StatusCode.BAD_REQUEST,
+                message="未接收到有效图片数据或图像数据存在异常"
+            )
 
         # 2. 检测并裁剪人脸
         try:
             face_image, bbox , tip = await ai_engine.detect_and_extract_face(image_data)
         except Exception as e:
             logger.error(f"[/persons] 人脸检测服务内部错误: {e}")
-            raise HTTPException(status_code=500, detail=f"人脸检测服务内部错误: {str(e)}")
+            return ApiResponse.error(
+                status_code=StatusCode.FACE_DETECTION_ERROR,
+                message=f"人脸检测服务内部错误: {str(e)}"
+            )
 
         if face_image is None:
             logger.error(f"[/persons] 未检测到有效人脸")
-            raise HTTPException(status_code=422, detail="未检测到有效人脸")
+            return ApiResponse.error(
+                status_code=StatusCode.UNPROCESSABLE_ENTITY,
+                message="未检测到有效人脸"
+            )
 
         if face_image.shape[0] < MIN_FEATURE_IMAGE_WIDTH_PX or face_image.shape[1] < MIN_FEATURE_IMAGE_HEIGHT_PX:
             logger.error(f"[/persons] 检测人脸特征尺寸过小，小于{MIN_FEATURE_IMAGE_WIDTH_PX}*{MIN_FEATURE_IMAGE_HEIGHT_PX}px")
-            raise HTTPException(
-                status_code=422,
-                detail=f"检测到的人脸过小(小于{MIN_FEATURE_IMAGE_WIDTH_PX}*{MIN_FEATURE_IMAGE_HEIGHT_PX}px)，无法识别，请重新捕捉人脸"
+            return ApiResponse.error(
+                status_code=StatusCode.FACE_TOO_SMALL,
+                message=f"检测到的人脸过小(小于{MIN_FEATURE_IMAGE_WIDTH_PX}*{MIN_FEATURE_IMAGE_HEIGHT_PX}px)，无法识别，请重新捕捉人脸"
             )
 
         # 3. 提取特征向量
@@ -67,9 +88,13 @@ async def create_person_api(
             emb_q = await ai_engine.get_embedding(face_image)
         except Exception as e:
             logger.error(f"[/persons] 人脸特征提取失败: {e}")
-            raise HTTPException(status_code=500, detail=f"人脸特征提取失败: {str(e)}")
+            return ApiResponse.error(
+                status_code=StatusCode.FEATURE_EXTRACT_ERROR,
+                message=f"人脸特征提取失败: {str(e)}"
+            )
 
         # 4. 保存裁剪后的人脸图片
+        photo_path = ""  # 默认为空
         try:
             media_dir = BASE_DIR / "media" / "person_photos"
             media_dir.mkdir(parents=True, exist_ok=True)
@@ -78,9 +103,12 @@ async def create_person_api(
             filename = f"{request.name}_{request.number}_{uuid.uuid4().hex[:8]}.jpg"
             save_path = media_dir / filename
             cv2.imwrite(str(save_path), face_image)
+            photo_path = f"/media/person_photos/{filename}"
         except Exception as e:
             logger.error(f"[/persons] 保存图片失败: {e}")
-            raise HTTPException(status_code=500, detail=f"保存图片失败: {str(e)}")
+            # 文件保存失败，但人脸检测和特征提取已成功，继续保存到数据库
+            logger.warning(f"[/persons] 图片保存失败，但继续保存特征数据到数据库")
+            photo_path = ""  # 图片路径为空
 
         # 5. 保存到数据库
         bbox_str = f"{bbox['x']},{bbox['y']},{bbox['w']},{bbox['h']}" if bbox else ""
@@ -88,12 +116,12 @@ async def create_person_api(
         person_dict = {
             "name": request.name,
             "number": request.number,
-            "photo_path": f"/media/person_photos/{filename}",
+            "photo_path": photo_path,  # 使用变量，可能为空
             "bbox": bbox_str,  # 人脸检测框: x,y,w,h,
             "embedding": Binary(emb_q.tobytes()),
             "tip": tip if tip else ""
         }
-        logger.info(f"person_dict prepared for DB: {person_dict}")
+        # logger.info(f"person_dict prepared for DB: {person_dict}")
 
         try:
             # 使用 update_or_create_person 实现存在则更新，不存在则创建
@@ -102,25 +130,45 @@ async def create_person_api(
             logger.info(f"[/persons] 人物 {request.name} {action}成功")
         except Exception as e:
             logger.error(f"[/persons] 数据库操作失败: {e}")
-            raise HTTPException(status_code=500, detail=f"数据库操作失败: {str(e)}")
+            return ApiResponse.error(
+                status_code=StatusCode.INTERNAL_ERROR,
+                message=f"数据库操作失败: {str(e)}"
+            )
 
-        return PersonFeatureResponse(
-            id=str(doc["_id"]),
-            name=doc.get("name"),
-            number=doc.get("number"),
-            photo_path=doc.get("photo_path"),
-            tip=doc.get("tip"),
+        # 如果图片保存失败，返回 503 状态码但包含数据
+        if not photo_path:
+            return ApiResponse.error(
+                status_code=StatusCode.FILE_SAVE_ERROR,
+                message=f"人物特征{action}成功，但图片保存失败",
+                data={
+                    "id": str(doc["_id"]),
+                    "name": doc.get("name"),
+                    "number": doc.get("number"),
+                    "photo_path": doc.get("photo_path", ""),
+                    "tip": doc.get("tip", "") + " (图片保存失败)"
+                }
+            )
+
+        return ApiResponse.success(
+            data={
+                "id": str(doc["_id"]),
+                "name": doc.get("name"),
+                "number": doc.get("number"),
+                "photo_path": doc.get("photo_path"),
+                "tip": doc.get("tip")
+            },
+            message=f"人物特征{action}成功"
         )
 
-    except HTTPException:
-        # 重新抛出 HTTPException
-        raise
     except Exception as e:
         # 捕获所有未预期的异常
         logger.error(f"[/persons] 未预期的异常: {e}")
-        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
+        return ApiResponse.error(
+            status_code=StatusCode.INTERNAL_ERROR,
+            message=f"服务器内部错误: {str(e)}"
+        )
 
-@router.post("/batch", response_model=PersonsFeatureResponse)
+@router.post("/batch", response_model=ApiResponse)
 async def create_persons_batch_api(
         request: PersonsFeatureRequest = Body(..., description="批量人脸特征录入请求体")
 ):
@@ -129,15 +177,32 @@ async def create_persons_batch_api(
     接受多个人物的照片和信息，返回批量处理结果
 
     注意：
-    - 只有全部成功才返回 200
-    - 任何一条记录失败都会抛出异常，并返回详细的失败信息
+    - HTTP 状态码永远是 200
+    - 通过 status_code 字段判断结果
+    - status_code=200: 全部成功
+    - status_code=207: 部分失败（部分成功、部分失败）
+    - status_code=400: 全部失败
     """
     results = []
     failed_records = []
 
     for idx, person_req in enumerate(request.persons):
         try:
-            image_data, filename = await base64_to_mat(person_req.photo)
+            # 解析图片数据，捕获 HTTPException
+            try:
+                image_data, filename = await base64_to_mat(person_req.photo)
+            except HTTPException as e:
+                error_msg = f"第{idx+1}个人物({person_req.name}_{person_req.number}): {e.detail}"
+                logger.error(f"[/persons/batch] {error_msg}")
+                failed_records.append(error_msg)
+                results.append(PersonFeatureResponse(
+                    id="",
+                    name=person_req.name,
+                    number=person_req.number,
+                    photo_path="",
+                    tip=f"错误: {e.detail}"
+                ))
+                continue
 
             if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
                 error_msg = f"第{idx+1}个人物({person_req.name}_{person_req.number}): 未接收到有效图片数据或图像数据存在异常"
@@ -262,6 +327,7 @@ async def create_persons_batch_api(
                 tip=f"错误: 处理异常 - {str(e)}"
             ))
 
+    # 检查是否有失败记录
     if failed_records:
         failed_count = len(failed_records)
         success_count = len(results) - failed_count
@@ -269,23 +335,69 @@ async def create_persons_batch_api(
         # 收集失败的 number 列表
         failed_numbers = [r.number for r in results if not r.id]
 
-        error_detail = {
-            "message": f"批量处理失败: 成功{success_count}条，失败{failed_count}条",
-            "success_count": success_count,
-            "failed_count": failed_count,
-            "failed_numbers": failed_numbers,
-            "failed_details": failed_records[:5]
-        }
+        # 判断是部分失败还是全部失败
+        if success_count > 0:
+            # 部分失败
+            logger.warning(f"[/persons/batch] 批量处理部分失败: 成功{success_count}条，失败{failed_count}条，失败编号: {failed_numbers}")
+            return ApiResponse.error(
+                status_code=StatusCode.PARTIAL_SUCCESS,
+                message=f"批量处理部分失败: 成功{success_count}条，失败{failed_count}条",
+                data={
+                    "success_count": success_count,
+                    "failed_count": failed_count,
+                    "failed_numbers": failed_numbers,
+                    "failed_details": failed_records[:5],
+                    "persons": [
+                        {
+                            "id": r.id,
+                            "name": r.name,
+                            "number": r.number,
+                            "photo_path": r.photo_path,
+                            "tip": r.tip
+                        } for r in results
+                    ]
+                }
+            )
+        else:
+            # 全部失败
+            logger.error(f"[/persons/batch] 批量处理全部失败: 失败{failed_count}条，失败编号: {failed_numbers}")
+            return ApiResponse.error(
+                status_code=StatusCode.BAD_REQUEST,
+                message=f"批量处理全部失败: {failed_count}条",
+                data={
+                    "success_count": 0,
+                    "failed_count": failed_count,
+                    "failed_numbers": failed_numbers,
+                    "failed_details": failed_records[:5],
+                    "persons": [
+                        {
+                            "id": r.id,
+                            "name": r.name,
+                            "number": r.number,
+                            "photo_path": r.photo_path,
+                            "tip": r.tip
+                        } for r in results
+                    ]
+                }
+            )
 
-        if len(failed_records) > 5:
-            error_detail["message"] += f"（仅显示前5条失败详情）"
+    # 全部成功
+    return ApiResponse.success(
+        data={
+            "persons": [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "number": r.number,
+                    "photo_path": r.photo_path,
+                    "tip": r.tip
+                } for r in results
+            ]
+        },
+        message=f"批量处理成功: {len(results)}条"
+    )
 
-        logger.error(f"[/persons/batch] 批量处理失败: 成功{success_count}条，失败{failed_count}条，失败编号: {failed_numbers}")
-        raise HTTPException(status_code=400, detail=str(error_detail))
-
-    return PersonsFeatureResponse(persons=results)
-
-@router.get("", response_model=List[PersonRead])
+@router.get("", response_model=ApiResponse)
 async def read_persons_api(
         skip: int = Query(0, description="跳过数据条数"),
         limit: int = Query(100, description="返回数据条数")
@@ -293,44 +405,61 @@ async def read_persons_api(
     """
     获取人物列表接口
     - 支持分页查询
+    - HTTP 状态码永远是 200，通过 status_code 字段判断结果
     """
     try:
         docs = await person_crud.get_persons(db, skip=skip, limit=limit)
         if not docs:
             logger.warning("[/persons(get)] 数据库为空，没有任何人物记录")
-            raise HTTPException(status_code=404, detail="数据库为空，请先创建人物")
-        return [doc_to_person_read(d) for d in docs]
-    except HTTPException:
-        raise
+            return ApiResponse.error(
+                status_code=StatusCode.NOT_FOUND,
+                message="数据库为空，请先创建人物"
+            )
+
+        persons_list = [doc_to_person_read(d) for d in docs]
+        return ApiResponse.success(
+            data={"persons": [p.model_dump() for p in persons_list]},
+            message="查询成功"
+        )
     except Exception as e:
         logger.error(f"[/persons(get)] 查询失败: {e}")
-        raise HTTPException(status_code=500, detail=f"查询人物列表失败: {str(e)}")
+        return ApiResponse.error(
+            status_code=StatusCode.INTERNAL_ERROR,
+            message=f"查询人物列表失败: {str(e)}"
+        )
 
 
-@router.post("/search", response_model=SearchPersonResponse)
+@router.post("/search", response_model=ApiResponse)
 async def search_person_api(
         request: SearchPersonRequest = Body(..., description="搜索人物请求体"),
-) -> dict:
+) -> ApiResponse:
     """
     搜索人物接口
     - 只传 name: 模糊查询
     - 只传 number: 精确查询
     - 都传: 组合查询 (name模糊 AND number精确)
+    - HTTP 状态码永远是 200，通过 status_code 字段判断结果
     """
     try:
         if not request.name and not request.number:
-            raise HTTPException(status_code=400, detail="name 和 number 至少提供一个")
+            return ApiResponse.error(
+                status_code=StatusCode.BAD_REQUEST,
+                message="name 和 number 至少提供一个"
+            )
 
         persons_list = await person_crud.get_persons_list_dynamic(
-            db, 
-            name=request.name, 
+            db,
+            name=request.name,
             number=request.number,
-            limit=20 
+            limit=20
         )
+
         if not persons_list:
             logger.warning(f"[/persons/search] 未找到人物: {request.model_dump(exclude_unset=True)}")
-            # raise HTTPException(status_code=404, detail="未找到符合条件的人物")
-            return {"persons": []}
+            return ApiResponse.success(
+                data={"persons": []},
+                message="未找到符合条件的人物"
+            )
 
         # 4. 序列化列表：处理 ObjectId 并转为 Pydantic 模型
         result_data = []
@@ -339,29 +468,37 @@ async def search_person_api(
             p_dict = {**p, "id": str(p["_id"])}
             # 使用 PersonRead 模型验证并转为 dict
             result_data.append(PersonRead(**p_dict).model_dump())
-        return {
-            "persons": result_data
-        }
-    except HTTPException:
-        raise
+
+        return ApiResponse.success(
+            data={"persons": result_data},
+            message=f"搜索成功，找到 {len(result_data)} 条记录"
+        )
     except Exception as e:
         logger.error(f"[/persons/search] 搜索失败: {e}")
-        raise HTTPException(status_code=500, detail=f"搜索人物失败: {str(e)}")
+        return ApiResponse.error(
+            status_code=StatusCode.INTERNAL_ERROR,
+            message=f"搜索人物失败: {str(e)}"
+        )
 
 
-@router.delete("/delete")
+@router.delete("/delete", response_model=ApiResponse)
 async def delete_person_general_api(
         request: DeletePersonRequest = Body(..., description="删除人物请求体"),
 ):
     """
     通用删除人物接口
-    - 支持通过 name(模糊) 或 number(精确) 删除
+    - 支持通过 name(模糊) 或 number(精确) 或 id(精确) 删除
     - name: 模糊匹配,可能删除多条
     - number: 精确匹配,只删除一条
+    - id: 精确匹配,只删除一条
+    - HTTP 状态码永远是 200，通过 status_code 字段判断结果
     """
     try:
         if not request.name and not request.number and not request.id:
-            raise HTTPException(status_code=400, detail="name、number 和 id 至少提供一个")
+            return ApiResponse.error(
+                status_code=StatusCode.BAD_REQUEST,
+                message="name、number 和 id 至少提供一个"
+            )
 
         # 优先按 name 模糊删除
         if request.name:
@@ -369,17 +506,24 @@ async def delete_person_general_api(
                 deleted_count, info_list = await person_crud.delete_persons_by_name(db, name_keyword=request.name)
                 if deleted_count == 0:
                     logger.warning(f"[/persons/delete] 未找到匹配的人物: name={request.name}")
-                    raise HTTPException(status_code=404, detail="未找到匹配人物")
+                    return ApiResponse.error(
+                        status_code=StatusCode.NOT_FOUND,
+                        message="未找到匹配人物"
+                    )
                 logger.info(f"[/persons/delete] 删除了 {deleted_count} 个人物: name={request.name}")
-                return {
-                    "message": f"成功删除 {deleted_count} 个人物",
-                    "info": info_list
-                }
-            except HTTPException:
-                raise
+                return ApiResponse.success(
+                    data={
+                        "deleted_count": deleted_count,
+                        "info": info_list
+                    },
+                    message=f"成功删除 {deleted_count} 个人物"
+                )
             except Exception as e:
                 logger.error(f"[/persons/delete] 按姓名删除失败: {e}")
-                raise HTTPException(status_code=500, detail=f"按姓名删除失败: {str(e)}")
+                return ApiResponse.error(
+                    status_code=StatusCode.INTERNAL_ERROR,
+                    message=f"按姓名删除失败: {str(e)}"
+                )
 
         # 其次按 number 精确删除
         if request.number:
@@ -387,17 +531,24 @@ async def delete_person_general_api(
                 deleted_count, info_list = await person_crud.delete_person_by_number(db, number=request.number)
                 if deleted_count == 0:
                     logger.warning(f"[/persons/delete] 未找到该人物: number={request.number}")
-                    raise HTTPException(status_code=404, detail="未找到该人物")
+                    return ApiResponse.error(
+                        status_code=StatusCode.NOT_FOUND,
+                        message="未找到该人物"
+                    )
                 logger.info(f"[/persons/delete] 删除人物成功: number={request.number}")
-                return {
-                    "message": f"成功删除 {deleted_count} 个人物",
-                    "info": info_list
-                }
-            except HTTPException:
-                raise
+                return ApiResponse.success(
+                    data={
+                        "deleted_count": deleted_count,
+                        "info": info_list
+                    },
+                    message=f"成功删除 {deleted_count} 个人物"
+                )
             except Exception as e:
                 logger.error(f"[/persons/delete] 按编号删除失败: {e}")
-                raise HTTPException(status_code=500, detail=f"按编号删除失败: {str(e)}")
+                return ApiResponse.error(
+                    status_code=StatusCode.INTERNAL_ERROR,
+                    message=f"按编号删除失败: {str(e)}"
+                )
 
         # 最后按 id 精确删除(保留向后兼容)
         if request.id:
@@ -405,20 +556,28 @@ async def delete_person_general_api(
                 deleted_count, info_list = await person_crud.delete_person_by_id(db, id=request.id)
                 if deleted_count == 0:
                     logger.warning(f"[/persons/delete] 未找到该人物: id={request.id}")
-                    raise HTTPException(status_code=404, detail="未找到该人物")
+                    return ApiResponse.error(
+                        status_code=StatusCode.NOT_FOUND,
+                        message="未找到该人物"
+                    )
                 logger.info(f"[/persons/delete] 删除人物成功: id={request.id}")
-                return {
-                    "message": f"成功删除 {deleted_count} 个人物",
-                    "info": info_list
-                }
-            except HTTPException:
-                raise
+                return ApiResponse.success(
+                    data={
+                        "deleted_count": deleted_count,
+                        "info": info_list
+                    },
+                    message=f"成功删除 {deleted_count} 个人物"
+                )
             except Exception as e:
                 logger.error(f"[/persons/delete] 按ID删除失败: {e}")
-                raise HTTPException(status_code=500, detail=f"按ID删除失败: {str(e)}")
+                return ApiResponse.error(
+                    status_code=StatusCode.INTERNAL_ERROR,
+                    message=f"按ID删除失败: {str(e)}"
+                )
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"[/persons/delete] 删除操作失败: {e}")
-        raise HTTPException(status_code=500, detail=f"删除操作失败: {str(e)}")
+        return ApiResponse.error(
+            status_code=StatusCode.INTERNAL_ERROR,
+            message=f"删除操作失败: {str(e)}"
+        )

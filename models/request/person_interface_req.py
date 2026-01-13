@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from app.models.schemas import PersonBase
 from typing import Optional
 
@@ -11,6 +11,27 @@ class PersonFeatureRequest(BaseModel):
     photo: str
     name: str
     number: str
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError('缺少name参数')
+        return v
+
+    @field_validator('number')
+    @classmethod
+    def validate_number(cls, v):
+        if not v or not v.strip():
+            raise ValueError('缺少number参数')
+        return v
+
+    @field_validator('photo')
+    @classmethod
+    def validate_photo(cls, v):
+        if not v or not v.strip():
+            raise ValueError('缺少photo参数')
+        return v
 
 class PersonsFeatureRequest(BaseModel):
     persons: list[PersonFeatureRequest]

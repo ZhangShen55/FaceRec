@@ -6,6 +6,8 @@ from concurrent.futures import ProcessPoolExecutor
 from contextvars import ContextVar
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from app.core.database import db
 from app.core import ai_engine
@@ -14,6 +16,7 @@ from app.core.logger import get_logger
 from app.router import faces, persons, web, ops
 from app.core.logger import request_id_ctx, new_request_id
 from app.middleware import APIStatsMiddleware
+from app.models.api_response import StatusCode, ApiResponse
 
 logger = get_logger(__name__)
 
@@ -58,6 +61,50 @@ app = FastAPI(
     title="人脸识别API系统",
     lifespan=lifespan
 )
+
+# ---------------- 全局异常处理器 ----------------
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    处理 Pydantic 验证错误，返回统一的 ApiResponse 格式
+    HTTP 状态码永远是 200，通过 status_code 字段区分错误
+    """
+    # 提取第一个错误信息
+    errors = exc.errors()
+    if errors:
+        error = errors[0]
+        # 获取字段名
+        field = error.get('loc', [])[-1] if error.get('loc') else 'unknown'
+        # 获取错误类型
+        error_type = error.get('type', '')
+
+        # 根据错误类型生成友好的错误信息
+        if error_type == 'missing':
+            message = f"缺少{field}参数"
+        else:
+            # 使用自定义的错误信息（来自 field_validator）
+            message = error.get('msg', '参数验证失败')
+
+        logger.error(f"[ValidationError] 参数验证失败: {message}, path: {request.url.path}")
+
+        # 返回 JSONResponse，HTTP 状态码为 200
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status_code": StatusCode.BAD_REQUEST,
+                "message": message,
+                "data": None
+            }
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status_code": StatusCode.BAD_REQUEST,
+            "message": "请求参数验证失败",
+            "data": None
+        }
+    )
 
 # ---------------- 注册中间件 ----------------
 # 1. API 统计中间件（必须在 request_id 中间件之后）

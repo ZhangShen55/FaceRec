@@ -6,13 +6,53 @@
 
 ## 📋 目录
 
+- [重要说明](#重要说明)
 - [接口概览](#接口概览)
+- [统一响应格式](#统一响应格式)
+- [状态码说明](#状态码说明)
 - [创建人物](#创建人物)
 - [批量创建](#批量创建)
 - [查询人物](#查询人物)
 - [搜索人物](#搜索人物)
 - [删除人物](#删除人物)
-- [错误处理](#错误处理)
+- [最佳实践](#最佳实践)
+
+---
+
+## 重要说明
+
+**🔥 v5.0 重大变更**
+
+从 v5.0 开始，所有接口遵循以下规则：
+
+1. **HTTP 状态码永远是 200** - 不再抛出 HTTP 异常
+2. **通过 `status_code` 字段判断结果** - 成功/失败都在响应体中
+3. **统一响应格式** - 所有接口返回相同结构：`{status_code, message, data}`
+4. **参数验证增强** - 缺少必填参数时返回友好的中文错误提示（如"缺少name参数"）
+
+**前端/客户端适配要点：**
+```javascript
+// ❌ 旧方式（v4.0 及之前）
+try {
+  const response = await fetch('/persons', {...});
+  if (!response.ok) throw new Error('HTTP error');
+  const data = await response.json();
+} catch (error) {
+  // 处理 HTTP 异常
+}
+
+// ✅ 新方式（v5.0）
+const response = await fetch('/persons', {...});
+const result = await response.json();  // HTTP 永远是 200
+
+if (result.status_code === 200) {
+  // 成功 - 使用 result.data
+  console.log(result.data);
+} else {
+  // 失败 - 显示 result.message
+  console.error(result.message);
+}
+```
 
 ---
 
@@ -25,6 +65,47 @@
 | GET | `/persons` | 获取人物列表（分页） |
 | POST | `/persons/search` | 搜索人物（支持模糊/精确） |
 | DELETE | `/persons/delete` | 通用删除接口（支持 name/number/id） |
+
+---
+
+## 统一响应格式
+
+**所有接口**都返回以下格式（HTTP 状态码永远是 200）：
+
+```json
+{
+  "status_code": 200,
+  "message": "操作成功",
+  "data": {
+    // 具体数据，根据接口不同而不同
+  }
+}
+```
+
+**字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| status_code | int | 业务状态码（200=成功，400/404/422/500/502=各种失败） |
+| message | string | 操作结果描述信息 |
+| data | object/null | 成功时包含具体数据，失败时可能为 null 或包含错误详情 |
+
+---
+
+## 状态码说明
+
+| status_code | 含义 | 适用场景 |
+|-------------|------|---------|
+| **200** | 成功 | 操作成功完成 |
+| **207** | 部分成功 | 批量处理时部分成功、部分失败 |
+| **400** | 请求参数错误 | 缺少必填参数、图片数据无效、批量处理全部失败 |
+| **404** | 资源未找到 | 数据库为空、未找到匹配的人物 |
+| **422** | 无法处理的实体 | 未检测到人脸 |
+| **423** | 人脸尺寸过小 | 检测到的人脸过小，无法识别 |
+| **500** | 服务器内部错误 | 数据库操作失败 |
+| **501** | 人脸检测服务错误 | 人脸检测服务内部异常 |
+| **502** | 特征提取失败 | 人脸特征提取服务异常 |
+| **503** | 文件保存失败 | 文件系统错误 |
 
 ---
 
@@ -53,44 +134,82 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| name | string | 是 | 人物姓名 |
-| number | string | 是 | 人物编号（唯一标识） |
-| photo | string | 是 | Base64编码的图片数据 |
+| name | string | 是 | 人物姓名（不能为空或只包含空格） |
+| number | string | 是 | 人物编号（唯一标识，不能为空或只包含空格） |
+| photo | string | 是 | Base64编码的图片数据（不能为空或只包含空格） |
 
-**成功响应** (200):
+**⚠️ 参数验证说明**：
+- 所有字段都是必填的，缺少任何一个字段或字段值为空字符串/只包含空格时，将返回 `status_code=400` 的错误响应
+- 错误信息格式：`"缺少{字段名}参数"`（如："缺少name参数"、"缺少number参数"、"缺少photo参数"）
+
+**成功响应** (status_code=200):
 
 ```json
 {
-  "id": "507f1f77bcf86cd799439011",
-  "name": "张三",
-  "number": "001",
-  "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
-  "tip": "人脸特征像素正常，可以使用"
+  "status_code": 200,
+  "message": "人物特征创建成功",
+  "data": {
+    "id": "507f1f77bcf86cd799439011",
+    "name": "张三",
+    "number": "001",
+    "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
+    "tip": "人脸特征像素正常，可以使用"
+  }
 }
 ```
 
-**响应字段说明**：
+**错误响应示例**：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | string | MongoDB文档ID |
-| name | string | 人物姓名 |
-| number | string | 人物编号 |
-| photo_path | string | 保存的人脸图片路径 |
-| tip | string | 图像质量提示信息 |
+| status_code | message | 原因 |
+|-------------|---------|------|
+| 400 | 缺少name参数 | 请求体中未提供 name 字段 |
+| 400 | 缺少number参数 | 请求体中未提供 number 字段 |
+| 400 | 缺少photo参数 | 请求体中未提供 photo 字段 |
+| 400 | base64 解码失败: Incorrect padding | base64 格式错误 |
+| 400 | 未接收到有效图片数据或图像数据存在异常 | 图片格式错误或损坏 |
+| 422 | 未检测到有效人脸 | 图片中没有人脸 |
+| 423 | 检测到的人脸过小(小于80*80px)，无法识别，请重新捕捉人脸 | 人脸尺寸不足 |
+| 501 | 人脸检测服务内部错误: ... | 检测服务异常 |
+| 502 | 人脸特征提取失败: ... | 特征提取失败 |
+| 503 | 人物特征创建成功，但图片保存失败 | 文件系统错误（**注意：此错误会返回 data，因为核心业务已成功**） |
+| 500 | 数据库操作失败: ... | 数据库异常 |
 
-**错误响应**：
+**错误响应格式：**
 
-| 状态码 | 说明 | 返回示例 |
-|--------|------|---------|
-| 400 | 无效的图片数据 | `{"detail": "未接收到有效图片数据或图像数据存在异常"}` |
-| 422 | 未检测到人脸 | `{"detail": "未检测到有效人脸"}` |
-| 422 | 人脸过小 | `{"detail": "检测到的人脸过小(小于80*80px)，无法识别，请重新捕捉人脸"}` |
-| 500 | 人脸检测服务错误 | `{"detail": "人脸检测服务内部错误: ..."}` |
-| 500 | 特征提取失败 | `{"detail": "人脸特征提取失败: ..."}` |
-| 500 | 保存图片失败 | `{"detail": "保存图片失败: ..."}` |
-| 500 | 数据库操作失败 | `{"detail": "数据库操作失败: ..."}` |
-| 500 | 其他未预期异常 | `{"detail": "服务器内部错误: ..."}` |
+参数缺失错误示例：
+```json
+{
+  "status_code": 400,
+  "message": "缺少name参数",
+  "data": null
+}
+```
+
+人脸检测失败示例：
+```json
+{
+  "status_code": 422,
+  "message": "未检测到有效人脸",
+  "data": null
+}
+```
+
+文件保存失败示例（**注意：此错误会返回 data**）：
+```json
+{
+  "status_code": 503,
+  "message": "人物特征创建成功，但图片保存失败",
+  "data": {
+    "id": "507f1f77bcf86cd799439011",
+    "name": "张三",
+    "number": "001",
+    "photo_path": "",
+    "tip": "人脸特征像素正常，可以使用 (图片保存失败)"
+  }
+}
+```
+
+**说明**：当文件保存失败时，由于人脸检测、特征提取和数据库保存都已成功，API 会返回完整的数据信息（photo_path 为空字符串），客户端可以正常使用该记录进行人脸识别，只是无法查看原始照片。
 
 ---
 
@@ -102,9 +221,9 @@
 
 **功能说明**：
 - 接受多个人物信息
-- **全部成功才返回 200**
-- **任何一条失败都抛出 400 异常**
-- 异常信息包含成功/失败统计和详细错误
+- **全部成功**：返回 status_code=200
+- **部分失败**：返回 status_code=207，data 中包含详细信息
+- **全部失败**：返回 status_code=400，data 中包含详细信息
 
 **请求体**：
 
@@ -125,51 +244,130 @@
 }
 ```
 
-**成功响应** (200):
+**全部成功响应** (status_code=200):
 
 ```json
 {
-  "persons": [
-    {
-      "id": "507f1f77bcf86cd799439011",
-      "name": "张三",
-      "number": "001",
-      "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
-      "tip": "人脸特征像素正常，可以使用"
-    },
-    {
-      "id": "507f1f77bcf86cd799439012",
-      "name": "李四",
-      "number": "002",
-      "photo_path": "/media/person_photos/李四_002_b7c8d9e0.jpg",
-      "tip": "人脸特征像素正常，可以使用"
-    }
-  ]
+  "status_code": 200,
+  "message": "批量处理成功: 2条",
+  "data": {
+    "persons": [
+      {
+        "id": "507f1f77bcf86cd799439011",
+        "name": "张三",
+        "number": "001",
+        "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
+        "tip": "人脸特征像素正常，可以使用"
+      },
+      {
+        "id": "507f1f77bcf86cd799439012",
+        "name": "李四",
+        "number": "002",
+        "photo_path": "/media/person_photos/李四_002_b7c8d9e0.jpg",
+        "tip": "人脸特征像素正常，可以使用"
+      }
+    ]
+  }
 }
 ```
 
-**错误响应** (400):
+**部分失败响应** (status_code=207):
 
 ```json
-{ "detail": "
-  {'message': '批量处理失败: 成功1条，失败2条（仅显示前5条失败详情）', 'success_count': 1, 'failed_count': 2, 'failed_numbers': ['002', '003'], 'failed_details': ['第2个人物(李四_002): 未检测到有效人脸', '第3个人物(王五_003): 检测人脸特征尺寸过小']}"
+{
+  "status_code": 207,
+  "message": "批量处理部分失败: 成功1条，失败2条",
+  "data": {
+    "success_count": 1,
+    "failed_count": 2,
+    "failed_numbers": ["002", "003"],
+    "failed_details": [
+      "第2个人物(李四_002): 未检测到有效人脸",
+      "第3个人物(王五_003): 检测人脸特征尺寸过小"
+    ],
+    "persons": [
+      {
+        "id": "507f1f77bcf86cd799439011",
+        "name": "张三",
+        "number": "001",
+        "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
+        "tip": "人脸特征像素正常，可以使用"
+      },
+      {
+        "id": "",
+        "name": "李四",
+        "number": "002",
+        "photo_path": "",
+        "tip": "错误: 未检测到有效人脸"
+      },
+      {
+        "id": "",
+        "name": "王五",
+        "number": "003",
+        "photo_path": "",
+        "tip": "错误: 检测人脸特征尺寸过小"
+      }
+    ]
+  }
 }
 ```
 
-**错误响应字段说明**：
+**全部失败响应** (status_code=400):
+
+```json
+{
+  "status_code": 400,
+  "message": "批量处理全部失败: 3条",
+  "data": {
+    "success_count": 0,
+    "failed_count": 3,
+    "failed_numbers": ["001", "002", "003"],
+    "failed_details": [
+      "第1个人物(张三_001): 未检测到有效人脸",
+      "第2个人物(李四_002): 未检测到有效人脸",
+      "第3个人物(王五_003): 检测人脸特征尺寸过小"
+    ],
+    "persons": [
+      {
+        "id": "",
+        "name": "张三",
+        "number": "001",
+        "photo_path": "",
+        "tip": "错误: 未检测到有效人脸"
+      },
+      {
+        "id": "",
+        "name": "李四",
+        "number": "002",
+        "photo_path": "",
+        "tip": "错误: 未检测到有效人脸"
+      },
+      {
+        "id": "",
+        "name": "王五",
+        "number": "003",
+        "photo_path": "",
+        "tip": "错误: 检测人脸特征尺寸过小"
+      }
+    ]
+  }
+}
+```
+
+**data 字段说明（失败时）**：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| message | string | 概要信息 |
 | success_count | int | 成功入库的数量 |
 | failed_count | int | 失败的数量 |
 | failed_numbers | array | 失败记录的编号列表 |
 | failed_details | array | 失败详情（最多5条） |
+| persons | array | 所有记录的处理结果，失败记录的 id 为空字符串 |
 
-**响应说明**：
-- ✅ **全部成功**：返回 200，所有记录都有 `id` 和 `photo_path`
-- ❌ **部分失败**：返回 400，包含失败统计、失败编号列表和前5条失败详情
-- ❌ **全部失败**：返回 400，包含所有失败详情（最多5条）
+**判断方法**：
+- ✅ **全部成功**：`status_code === 200`
+- ⚠️ **部分失败**：`status_code === 207`（部分成功、部分失败）
+- ❌ **全部失败**：`status_code === 400`（所有记录都失败）
 
 ---
 
@@ -192,46 +390,44 @@
 GET /persons?skip=0&limit=20
 ```
 
-**成功响应** (200):
+**成功响应** (status_code=200):
 
 ```json
-[
-  {
-    "id": "507f1f77bcf86cd799439011",
-    "name": "张三",
-    "number": "001",
-    "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
-    "bbox": "100,50,200,250",
-    "tip": "人脸特征像素正常，可以使用"
-  },
-  {
-    "id": "507f1f77bcf86cd799439012",
-    "name": "李四",
-    "number": "002",
-    "photo_path": "/media/person_photos/李四_002_b7c8d9e0.jpg",
-    "bbox": "120,60,180,230",
-    "tip": ""
+{
+  "status_code": 200,
+  "message": "查询成功",
+  "data": {
+    "persons": [
+      {
+        "id": "507f1f77bcf86cd799439011",
+        "name": "张三",
+        "number": "001",
+        "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
+        "bbox": "100,50,200,250",
+        "tip": "人脸特征像素正常，可以使用"
+      },
+      {
+        "id": "507f1f77bcf86cd799439012",
+        "name": "李四",
+        "number": "002",
+        "photo_path": "/media/person_photos/李四_002_b7c8d9e0.jpg",
+        "bbox": "120,60,180,230",
+        "tip": ""
+      }
+    ]
   }
-]
+}
 ```
 
-**响应字段说明**：
+**数据库为空响应** (status_code=404):
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | string | MongoDB文档ID |
-| name | string | 人物姓名 |
-| number | string | 人物编号 |
-| photo_path | string | 人脸图片路径 |
-| bbox | string | 人脸检测框 (格式: "x,y,w,h") |
-| tip | string | 图像质量提示 |
-
-**错误响应**：
-
-| 状态码 | 说明 |
-|--------|------|
-| 404 | 数据库为空，请先创建人物 |
-| 500 | 查询失败 |
+```json
+{
+  "status_code": 404,
+  "message": "数据库为空，请先创建人物",
+  "data": null
+}
+```
 
 ---
 
@@ -264,61 +460,48 @@ GET /persons?skip=0&limit=20
 
 **注意**：至少提供一个参数
 
-**请求示例**：
-
-仅按姓名模糊搜索：
-```json
-{
-  "name": "张"
-}
-```
-
-仅按编号精确搜索：
-```json
-{
-  "number": "001"
-}
-```
-
-组合搜索：
-```json
-{
-  "name": "张",
-  "number": "001"
-}
-```
-
-**成功响应** (200):
+**找到结果响应** (status_code=200):
 
 ```json
 {
-  "persons": [
-    {
-      "id": "507f1f77bcf86cd799439011",
-      "name": "张三",
-      "number": "001",
-      "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
-      "bbox": "100,50,200,250",
-      "tip": "人脸特征像素正常，可以使用"
-    }
-  ]
+  "status_code": 200,
+  "message": "搜索成功，找到 1 条记录",
+  "data": {
+    "persons": [
+      {
+        "id": "507f1f77bcf86cd799439011",
+        "name": "张三",
+        "number": "001",
+        "photo_path": "/media/person_photos/张三_001_a3b4c5d6.jpg",
+        "bbox": "100,50,200,250",
+        "tip": "人脸特征像素正常，可以使用"
+      }
+    ]
+  }
 }
 ```
 
-**未找到结果**：
+**未找到结果响应** (status_code=200):
 
 ```json
 {
-  "persons": []
+  "status_code": 200,
+  "message": "未找到符合条件的人物",
+  "data": {
+    "persons": []
+  }
 }
 ```
 
-**错误响应**：
+**参数错误响应** (status_code=400):
 
-| 状态码 | 说明 |
-|--------|------|
-| 400 | name 和 number 至少提供一个 |
-| 500 | 搜索失败 |
+```json
+{
+  "status_code": 400,
+  "message": "name 和 number 至少提供一个",
+  "data": null
+}
+```
 
 ---
 
@@ -367,87 +550,260 @@ GET /persons?skip=0&limit=20
   - 例如：`name: "张三"` 会删除"张三"、"张三丰"、"小张三"等所有包含"张三"的记录
   - 可能一次删除多条记录
 
-**成功响应**：
+**成功响应** (status_code=200):
 
 按 `name` 模糊删除（可能删除多条）:
 ```json
 {
+  "status_code": 200,
   "message": "成功删除 2 个人物",
-  "info": [
-    {
-      "id": "507f1f77bcf86cd799439011",
-      "number": "t123",
-      "name": "张三"
-    },
-    {
-      "id": "507f1f77bcf86cd799439012",
-      "number": "t124",
-      "name": "张三丰"
-    }
-  ]
+  "data": {
+    "deleted_count": 2,
+    "info": [
+      {
+        "id": "507f1f77bcf86cd799439011",
+        "number": "t123",
+        "name": "张三"
+      },
+      {
+        "id": "507f1f77bcf86cd799439012",
+        "number": "t124",
+        "name": "张三丰"
+      }
+    ]
+  }
 }
 ```
 
 按 `number` 精确删除（只删除一条,但返回数组格式）:
 ```json
 {
+  "status_code": 200,
   "message": "成功删除 1 个人物",
-  "info": [
-    {
-      "id": "507f1f77bcf86cd799439011",
-      "number": "t123",
-      "name": "张三"
-    }
-  ]
+  "data": {
+    "deleted_count": 1,
+    "info": [
+      {
+        "id": "507f1f77bcf86cd799439011",
+        "number": "t123",
+        "name": "张三"
+      }
+    ]
+  }
 }
 ```
 
-按 `id` 删除（只删除一条,但返回数组格式）:
+**未找到响应** (status_code=404):
+
 ```json
 {
-  "message": "成功删除 1 个人物",
-  "info": [
-    {
-      "id": "507f1f77bcf86cd799439011",
-      "number": "t123",
-      "name": "张三"
-    }
-  ]
+  "status_code": 404,
+  "message": "未找到匹配人物",
+  "data": null
 }
 ```
 
-**错误响应**：
+**参数错误响应** (status_code=400):
 
-| 状态码 | 说明 |
-|--------|------|
-| 400 | name、number 和 id 至少提供一个 |
-| 404 | 未找到匹配人物 |
-| 500 | 删除操作失败 |
+```json
+{
+  "status_code": 400,
+  "message": "name、number 和 id 至少提供一个",
+  "data": null
+}
+```
 
 ---
 
-## 错误处理
+## 最佳实践
 
-### 常见错误码
+### 1. 统一的错误处理
 
-| 状态码 | 含义 | 常见原因 |
-|--------|------|---------|
-| 400 | Bad Request | 请求参数错误、图片数据无效 |
-| 404 | Not Found | 未找到指定资源 |
-| 422 | Unprocessable Entity | 图片中未检测到人脸、人脸过小 |
-| 500 | Internal Server Error | 服务器内部错误、数据库错误 |
+```javascript
+async function callApi(url, options) {
+  const response = await fetch(url, options);
+  const result = await response.json();  // HTTP 永远是 200
 
-### 错误响应格式
-
-所有错误都遵循统一格式：
-
-```json
-{
-  "detail": "错误描述信息"
+  if (result.status_code === 200) {
+    return result.data;  // 成功，返回数据
+  } else {
+    throw new Error(result.message);  // 失败，抛出业务错误
+  }
 }
 ```
 
-### 图片要求
+### 2. 创建人物
+
+```javascript
+async function createPerson(name, number, photoBase64) {
+  try {
+    const data = await callApi('/persons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, number, photo: photoBase64 })
+    });
+
+    console.log('创建成功:', data);
+    return data;
+  } catch (error) {
+    console.error('创建失败:', error.message);
+    throw error;
+  }
+}
+```
+
+### 3. 批量创建（带失败处理）
+
+```javascript
+async function batchCreatePersons(persons) {
+  const response = await fetch('/persons/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ persons })
+  });
+
+  const result = await response.json();
+
+  if (result.status_code === 200) {
+    // 全部成功
+    console.log('全部成功:', result.data.persons);
+    return { success: true, data: result.data };
+  } else if (result.status_code === 207) {
+    // 部分失败
+    console.warn(`部分失败: 成功${result.data.success_count}条，失败${result.data.failed_count}条`);
+    console.warn('失败编号:', result.data.failed_numbers);
+    console.warn('失败详情:', result.data.failed_details);
+
+    // 可以选择只返回成功的记录
+    const successRecords = result.data.persons.filter(p => p.id !== "");
+    return { success: false, partial: true, data: result.data, successRecords };
+  } else if (result.status_code === 400) {
+    // 全部失败
+    console.error('全部失败:', result.message);
+    console.error('失败详情:', result.data.failed_details);
+    return { success: false, partial: false, data: result.data };
+  } else {
+    throw new Error(result.message);
+  }
+}
+```
+
+### 4. 搜索人物
+
+```javascript
+async function searchPerson(keyword) {
+  const response = await fetch('/persons/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: keyword })
+  });
+
+  const result = await response.json();
+
+  if (result.status_code === 200) {
+    return result.data.persons;  // 返回结果数组（可能为空）
+  } else {
+    throw new Error(result.message);
+  }
+}
+```
+
+### 5. 按编号精确删除（推荐）
+
+```javascript
+async function deleteByNumber(number) {
+  const response = await fetch('/persons/delete', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ number })
+  });
+
+  const result = await response.json();
+
+  if (result.status_code === 200) {
+    console.log(result.message);  // "成功删除 1 个人物"
+    console.log('删除的人物:', result.data.info);
+    return result.data;
+  } else if (result.status_code === 404) {
+    console.warn('未找到该人物');
+    return null;
+  } else {
+    throw new Error(result.message);
+  }
+}
+```
+
+### 6. 按姓名模糊删除（慎用）
+
+```javascript
+async function deleteByName(name) {
+  // 警告：模糊匹配可能删除多个人物
+  const confirmation = confirm(`确定要删除所有名字包含"${name}"的人物吗？`);
+  if (!confirmation) return;
+
+  const response = await fetch('/persons/delete', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  });
+
+  const result = await response.json();
+
+  if (result.status_code === 200) {
+    console.log(`成功删除 ${result.data.deleted_count} 个人物`);
+    console.log('删除的人物列表:', result.data.info);
+    return result.data;
+  } else if (result.status_code === 404) {
+    console.warn('未找到匹配的人物');
+    return null;
+  } else {
+    throw new Error(result.message);
+  }
+}
+```
+
+### 7. React 示例（使用 hooks）
+
+```javascript
+import { useState } from 'react';
+
+function PersonManager() {
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const handleCreatePerson = async (name, number, photo) => {
+    setError(null);
+
+    const response = await fetch('/persons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, number, photo })
+    });
+
+    const data = await response.json();
+
+    if (data.status_code === 200) {
+      setResult(data.data);
+      alert('创建成功！');
+    } else {
+      setError(data.message);
+      alert(`创建失败: ${data.message}`);
+    }
+  };
+
+  return (
+    <div>
+      {error && <div className="error">{error}</div>}
+      {result && <div className="success">ID: {result.id}</div>}
+      {/* ... 表单组件 */}
+    </div>
+  );
+}
+```
+
+---
+
+## 图片要求
 
 **支持格式**：JPG, PNG, BMP
 
@@ -463,141 +819,11 @@ GET /persons?skip=0&limit=20
 
 ---
 
-## 最佳实践
-
-### 1. 创建人物
-
-```javascript
-async function createPerson(name, number, photoBase64) {
-  const response = await fetch('/persons', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, number, photo: photoBase64 })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail);
-  }
-
-  return await response.json();
-}
-```
-
-### 2. 批量创建
-
-```javascript
-async function batchCreatePersons(persons) {
-  const response = await fetch('/persons/batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ persons })
-  });
-
-  const result = await response.json();
-
-  // 检查失败的记录
-  const failed = result.persons.filter(p => !p.id);
-  if (failed.length > 0) {
-    console.warn('部分人物创建失败:', failed);
-  }
-
-  return result;
-}
-```
-
-### 3. 按编号精确删除（推荐）
-
-```javascript
-async function deleteByNumber(number) {
-  const response = await fetch('/persons/delete', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ number })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail);
-  }
-
-  const result = await response.json();
-  console.log(result.message); // "成功删除 1 个人物"
-  console.log('删除的人物:', result.info);
-  // [{ id: "507f1f77bcf86cd799439011", number: "001", name: "张三" }]
-  return result;
-}
-```
-
-### 4. 按姓名模糊删除（慎用）
-
-```javascript
-async function deleteByName(name) {
-  // 警告：模糊匹配可能删除多个人物
-  const response = await fetch('/persons/delete', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail);
-  }
-
-  const result = await response.json();
-  console.log(result.message); // "成功删除 2 个人物"
-  console.log('删除的人物列表:', result.info);
-  // info 始终是数组,无论删除几条
-  // [
-  //   { id: "507f1f77bcf86cd799439011", number: "001", name: "张三" },
-  //   { id: "507f1f77bcf86cd799439012", number: "002", name: "张三丰" }
-  // ]
-  return result;
-}
-```
-
-### 5. 搜索并删除
-
-```javascript
-async function searchAndDelete(keyword) {
-  // 先搜索
-  const searchResult = await fetch('/persons/search', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: keyword })
-  });
-
-  const { persons } = await searchResult.json();
-
-  if (persons.length === 0) {
-    console.log('未找到匹配人物');
-    return;
-  }
-
-  // 显示搜索结果并确认
-  console.log(`找到 ${persons.length} 个人物:`, persons);
-
-  if (confirm(`确定删除这些人物？`)) {
-    // 使用 number 精确删除第一个结果
-    const response = await fetch('/persons/delete', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ number: persons[0].number })
-    });
-
-    const result = await response.json();
-    console.log('删除结果:', result);
-  }
-}
-```
-
----
-
 ## 更新日志
 
 | 版本 | 日期 | 变更内容 |
 |------|------|---------|
+| v5.0 | 2026-01-13 | **重大变更**: 统一响应格式，所有接口 HTTP 状态码永远返回 200，通过 `status_code` 字段区分成功/失败。移除所有 HTTPException。这是一个**破坏性变更**，需要客户端/前端适配。 |
 | v4.0 | 2026-01-12 | **破坏性变更**: 移除冗余接口 `/persons/by_name` 和 `/persons/by_id`,统一使用 `/persons/delete` |
 | v3.2 | 2026-01-12 | **重要优化**: 统一所有删除接口的响应格式,`info` 字段始终返回数组,避免类型不一致问题 |
 | v3.1 | 2026-01-12 | 优化 `/persons/delete` 接口：支持按 `number` 精确删除，返回详细的删除信息（包含 id、number 和 name） |
