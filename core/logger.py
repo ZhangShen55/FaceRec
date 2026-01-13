@@ -113,4 +113,4 @@ def new_request_id() -> str:
 
 setup_logging()
 logger = get_logger(__name__)
-logger.info("日志等级设置为:%s, 日志文件位置:%s", LEVEL, LOG_DIR)
+logger.info("日志等级设置为:%s, 日志文件位置:%s", LEVEL, LOG_PATH)
