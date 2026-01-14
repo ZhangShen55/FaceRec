@@ -26,8 +26,8 @@
 从 v5.0 开始，所有接口遵循以下规则：
 
 1. **HTTP 状态码永远是 200** - 不再抛出 HTTP 异常
-2. **通过 `status_code` 字段判断结果** - 成功/失败都在响应体中
-3. **统一响应格式** - 所有接口返回相同结构：`{status_code, message, data}`
+2. **通过 `statusCode` 字段判断结果** - 成功/失败都在响应体中
+3. **统一响应格式** - 所有接口返回相同结构：`{statusCode, message, data}`
 4. **参数验证增强** - 缺少必填参数时返回友好的中文错误提示（如"缺少name参数"）
 5. **批量接口优化** - `/persons/batch` 接口在循环中验证参数，即使部分记录参数缺失，其他有效记录仍会继续处理并返回 207 状态码
 
@@ -46,7 +46,7 @@ try {
 const response = await fetch('/persons', {...});
 const result = await response.json();  // HTTP 永远是 200
 
-if (result.status_code === 200) {
+if (result.statusCode === 200) {
   // 成功 - 使用 result.data
   console.log(result.data);
 } else {
@@ -75,7 +75,7 @@ if (result.status_code === 200) {
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "操作成功",
   "data": {
     // 具体数据，根据接口不同而不同
@@ -87,7 +87,7 @@ if (result.status_code === 200) {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| status_code | int | 业务状态码（200=成功，400/404/422/500/502=各种失败） |
+| statusCode | int | 业务状态码（200=成功，400/404/422/500/502=各种失败） |
 | message | string | 操作结果描述信息 |
 | data | object/null | 成功时包含具体数据，失败时可能为 null 或包含错误详情 |
 
@@ -95,7 +95,7 @@ if (result.status_code === 200) {
 
 ## 状态码说明
 
-| status_code | 含义 | 适用场景 |
+| statusCode | 含义 | 适用场景 |
 |-------------|------|---------|
 | **200** | 成功 | 操作成功完成 |
 | **207** | 部分成功 | 批量处理时部分成功、部分失败 |
@@ -140,14 +140,14 @@ if (result.status_code === 200) {
 | photo | string | 是 | Base64编码的图片数据（不能为空或只包含空格） |
 
 **⚠️ 参数验证说明**：
-- 所有字段都是必填的，缺少任何一个字段或字段值为空字符串/只包含空格时，将返回 `status_code=400` 的错误响应
+- 所有字段都是必填的，缺少任何一个字段或字段值为空字符串/只包含空格时，将返回 `statusCode=400` 的错误响应
 - 错误信息格式：`"缺少{字段名}参数"`（如："缺少name参数"、"缺少number参数"、"缺少photo参数"）
 
-**成功响应** (status_code=200):
+**成功响应** (statusCode=200):
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "人物特征创建成功",
   "data": {
     "id": "507f1f77bcf86cd799439011",
@@ -161,7 +161,7 @@ if (result.status_code === 200) {
 
 **错误响应示例**：
 
-| status_code | message | 原因 |
+| statusCode | message | 原因 |
 |-------------|---------|------|
 | 400 | 缺少name参数 | 请求体中未提供 name 字段 |
 | 400 | 缺少number参数 | 请求体中未提供 number 字段 |
@@ -180,7 +180,7 @@ if (result.status_code === 200) {
 参数缺失错误示例：
 ```json
 {
-  "status_code": 400,
+  "statusCode": 400,
   "message": "缺少name参数",
   "data": null
 }
@@ -189,7 +189,7 @@ if (result.status_code === 200) {
 人脸检测失败示例：
 ```json
 {
-  "status_code": 422,
+  "statusCode": 422,
   "message": "未检测到有效人脸",
   "data": null
 }
@@ -198,7 +198,7 @@ if (result.status_code === 200) {
 文件保存失败示例（**注意：此错误会返回 data**）：
 ```json
 {
-  "status_code": 503,
+  "statusCode": 503,
   "message": "人物特征创建成功，但图片保存失败",
   "data": {
     "id": "507f1f77bcf86cd799439011",
@@ -223,9 +223,9 @@ if (result.status_code === 200) {
 **功能说明**：
 - 接受多个人物信息
 - **参数验证在循环中进行**：即使部分记录参数缺失，其他有效记录仍会继续处理
-- **全部成功**：返回 status_code=200
-- **部分失败**：返回 status_code=207，data 中包含详细信息（包括参数验证失败的记录）
-- **全部失败**：返回 status_code=400，data 中包含详细信息
+- **全部成功**：返回 statusCode=200
+- **部分失败**：返回 statusCode=207，data 中包含详细信息（包括参数验证失败的记录）
+- **全部失败**：返回 statusCode=400，data 中包含详细信息
 
 **请求体**：
 
@@ -246,11 +246,11 @@ if (result.status_code === 200) {
 }
 ```
 
-**全部成功响应** (status_code=200):
+**全部成功响应** (statusCode=200):
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "批量处理成功: 2条",
   "data": {
     "persons": [
@@ -273,12 +273,12 @@ if (result.status_code === 200) {
 }
 ```
 
-**部分失败响应** (status_code=207):
+**部分失败响应** (statusCode=207):
 
 **示例1：参数验证失败 + 处理成功混合**
 ```json
 {
-  "status_code": 207,
+  "statusCode": 207,
   "message": "批量处理部分失败: 成功1条，失败2条",
   "data": {
     "success_count": 1,
@@ -318,7 +318,7 @@ if (result.status_code === 200) {
 **示例2：人脸检测失败**
 ```json
 {
-  "status_code": 207,
+  "statusCode": 207,
   "message": "批量处理部分失败: 成功1条，失败2条",
   "data": {
     "success_count": 1,
@@ -355,11 +355,11 @@ if (result.status_code === 200) {
 }
 ```
 
-**全部失败响应** (status_code=400):
+**全部失败响应** (statusCode=400):
 
 ```json
 {
-  "status_code": 400,
+  "statusCode": 400,
   "message": "批量处理全部失败: 3条",
   "data": {
     "success_count": 0,
@@ -408,9 +408,9 @@ if (result.status_code === 200) {
 | persons | array | 所有记录的处理结果，失败记录的 id 为空字符串 |
 
 **判断方法**：
-- ✅ **全部成功**：`status_code === 200`
-- ⚠️ **部分失败**：`status_code === 207`（部分成功、部分失败）
-- ❌ **全部失败**：`status_code === 400`（所有记录都失败）
+- ✅ **全部成功**：`statusCode === 200`
+- ⚠️ **部分失败**：`statusCode === 207`（部分成功、部分失败）
+- ❌ **全部失败**：`statusCode === 400`（所有记录都失败）
 
 ---
 
@@ -486,11 +486,11 @@ if (result.status_code === 200) {
 GET /persons?skip=0&limit=20
 ```
 
-**成功响应** (status_code=200):
+**成功响应** (statusCode=200):
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "查询成功",
   "data": {
     "persons": [
@@ -515,11 +515,11 @@ GET /persons?skip=0&limit=20
 }
 ```
 
-**数据库为空响应** (status_code=404):
+**数据库为空响应** (statusCode=404):
 
 ```json
 {
-  "status_code": 404,
+  "statusCode": 404,
   "message": "数据库为空，请先创建人物",
   "data": null
 }
@@ -556,11 +556,11 @@ GET /persons?skip=0&limit=20
 
 **注意**：至少提供一个参数
 
-**找到结果响应** (status_code=200):
+**找到结果响应** (statusCode=200):
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "搜索成功，找到 1 条记录",
   "data": {
     "persons": [
@@ -577,11 +577,11 @@ GET /persons?skip=0&limit=20
 }
 ```
 
-**未找到结果响应** (status_code=200):
+**未找到结果响应** (statusCode=200):
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "未找到符合条件的人物",
   "data": {
     "persons": []
@@ -589,11 +589,11 @@ GET /persons?skip=0&limit=20
 }
 ```
 
-**参数错误响应** (status_code=400):
+**参数错误响应** (statusCode=400):
 
 ```json
 {
-  "status_code": 400,
+  "statusCode": 400,
   "message": "name 和 number 至少提供一个",
   "data": null
 }
@@ -646,12 +646,12 @@ GET /persons?skip=0&limit=20
   - 例如：`name: "张三"` 会删除"张三"、"张三丰"、"小张三"等所有包含"张三"的记录
   - 可能一次删除多条记录
 
-**成功响应** (status_code=200):
+**成功响应** (statusCode=200):
 
 按 `name` 模糊删除（可能删除多条）:
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "成功删除 2 个人物",
   "data": {
     "deleted_count": 2,
@@ -674,7 +674,7 @@ GET /persons?skip=0&limit=20
 按 `number` 精确删除（只删除一条,但返回数组格式）:
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "成功删除 1 个人物",
   "data": {
     "deleted_count": 1,
@@ -689,21 +689,21 @@ GET /persons?skip=0&limit=20
 }
 ```
 
-**未找到响应** (status_code=404):
+**未找到响应** (statusCode=404):
 
 ```json
 {
-  "status_code": 404,
+  "statusCode": 404,
   "message": "未找到匹配人物",
   "data": null
 }
 ```
 
-**参数错误响应** (status_code=400):
+**参数错误响应** (statusCode=400):
 
 ```json
 {
-  "status_code": 400,
+  "statusCode": 400,
   "message": "name、number 和 id 至少提供一个",
   "data": null
 }
@@ -720,7 +720,7 @@ async function callApi(url, options) {
   const response = await fetch(url, options);
   const result = await response.json();  // HTTP 永远是 200
 
-  if (result.status_code === 200) {
+  if (result.statusCode === 200) {
     return result.data;  // 成功，返回数据
   } else {
     throw new Error(result.message);  // 失败，抛出业务错误
@@ -760,11 +760,11 @@ async function batchCreatePersons(persons) {
 
   const result = await response.json();
 
-  if (result.status_code === 200) {
+  if (result.statusCode === 200) {
     // 全部成功
     console.log('全部成功:', result.data.persons);
     return { success: true, data: result.data };
-  } else if (result.status_code === 207) {
+  } else if (result.statusCode === 207) {
     // 部分失败
     console.warn(`部分失败: 成功${result.data.success_count}条，失败${result.data.failed_count}条`);
     console.warn('失败编号:', result.data.failed_numbers);
@@ -773,7 +773,7 @@ async function batchCreatePersons(persons) {
     // 可以选择只返回成功的记录
     const successRecords = result.data.persons.filter(p => p.id !== "");
     return { success: false, partial: true, data: result.data, successRecords };
-  } else if (result.status_code === 400) {
+  } else if (result.statusCode === 400) {
     // 全部失败
     console.error('全部失败:', result.message);
     console.error('失败详情:', result.data.failed_details);
@@ -796,7 +796,7 @@ async function searchPerson(keyword) {
 
   const result = await response.json();
 
-  if (result.status_code === 200) {
+  if (result.statusCode === 200) {
     return result.data.persons;  // 返回结果数组（可能为空）
   } else {
     throw new Error(result.message);
@@ -816,11 +816,11 @@ async function deleteByNumber(number) {
 
   const result = await response.json();
 
-  if (result.status_code === 200) {
+  if (result.statusCode === 200) {
     console.log(result.message);  // "成功删除 1 个人物"
     console.log('删除的人物:', result.data.info);
     return result.data;
-  } else if (result.status_code === 404) {
+  } else if (result.statusCode === 404) {
     console.warn('未找到该人物');
     return null;
   } else {
@@ -845,11 +845,11 @@ async function deleteByName(name) {
 
   const result = await response.json();
 
-  if (result.status_code === 200) {
+  if (result.statusCode === 200) {
     console.log(`成功删除 ${result.data.deleted_count} 个人物`);
     console.log('删除的人物列表:', result.data.info);
     return result.data;
-  } else if (result.status_code === 404) {
+  } else if (result.statusCode === 404) {
     console.warn('未找到匹配的人物');
     return null;
   } else {
@@ -878,7 +878,7 @@ function PersonManager() {
 
     const data = await response.json();
 
-    if (data.status_code === 200) {
+    if (data.statusCode === 200) {
       setResult(data.data);
       alert('创建成功！');
     } else {
@@ -919,7 +919,7 @@ function PersonManager() {
 
 | 版本 | 日期 | 变更内容 |
 |------|------|---------|
-| v5.0 | 2026-01-13 | **重大变更**: 统一响应格式，所有接口 HTTP 状态码永远返回 200，通过 `status_code` 字段区分成功/失败。移除所有 HTTPException。这是一个**破坏性变更**，需要客户端/前端适配。 |
+| v5.0 | 2026-01-13 | **重大变更**: 统一响应格式，所有接口 HTTP 状态码永远返回 200，通过 `statusCode` 字段区分成功/失败。移除所有 HTTPException。这是一个**破坏性变更**，需要客户端/前端适配。 |
 | v4.0 | 2026-01-12 | **破坏性变更**: 移除冗余接口 `/persons/by_name` 和 `/persons/by_id`,统一使用 `/persons/delete` |
 | v3.2 | 2026-01-12 | **重要优化**: 统一所有删除接口的响应格式,`info` 字段始终返回数组,避免类型不一致问题 |
 | v3.1 | 2026-01-12 | 优化 `/persons/delete` 接口：支持按 `number` 精确删除，返回详细的删除信息（包含 id、number 和 name） |

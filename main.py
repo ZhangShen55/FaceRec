@@ -67,7 +67,7 @@ app = FastAPI(
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """
     处理 Pydantic 验证错误，返回统一的 ApiResponse 格式
-    HTTP 状态码永远是 200，通过 status_code 字段区分错误
+    HTTP 状态码永远是 200，通过 statusCode 字段区分错误
     """
     # 提取第一个错误信息
     errors = exc.errors()
@@ -91,7 +91,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         return JSONResponse(
             status_code=200,
             content={
-                "status_code": StatusCode.BAD_REQUEST,
+                "statusCode": StatusCode.BAD_REQUEST,
                 "message": message,
                 "data": None
             }
@@ -100,7 +100,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=200,
         content={
-            "status_code": StatusCode.BAD_REQUEST,
+            "statusCode": StatusCode.BAD_REQUEST,
             "message": "请求参数验证失败",
             "data": None
         }

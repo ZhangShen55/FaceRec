@@ -23,8 +23,8 @@
 从 v5.0 开始，所有接口遵循以下规则：
 
 1. **HTTP 状态码永远是 200** - 不再抛出 HTTP 异常
-2. **通过 `status_code` 字段判断结果** - 成功/失败都在响应体中
-3. **统一响应格式** - 所有接口返回相同结构：`{status_code, message, data}`
+2. **通过 `statusCode` 字段判断结果** - 成功/失败都在响应体中
+3. **统一响应格式** - 所有接口返回相同结构：`{statusCode, message, data}`
 4. **细粒度的状态码** - 区分不同的错误场景（图片解析错误、人脸检测失败、未匹配等）
 
 **前端/客户端适配要点：**
@@ -42,19 +42,19 @@ try {
 const response = await fetch('/recognize', {...});
 const result = await response.json();  // HTTP 永远是 200
 
-if (result.status_code === 200) {
+if (result.statusCode === 200) {
   // 成功 - 匹配到人物
   console.log('匹配成功:', result.data.match);
-} else if (result.status_code === 201) {
+} else if (result.statusCode === 201) {
   // 未检测到人脸
   console.warn('未检测到人脸');
-} else if (result.status_code === 202) {
+} else if (result.statusCode === 202) {
   // 人脸过小
   console.warn('人脸过小');
-} else if (result.status_code === 251) {
+} else if (result.statusCode === 251) {
   // 数据库为空
   console.warn('数据库为空');
-} else if (result.status_code === 252) {
+} else if (result.statusCode === 252) {
   // 未匹配到对象
   console.warn('未匹配到对象');
 } else {
@@ -80,7 +80,7 @@ if (result.status_code === 200) {
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "操作成功",
   "data": {
     // 具体数据，根据接口不同而不同
@@ -92,7 +92,7 @@ if (result.status_code === 200) {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| status_code | int | 业务状态码（200=成功且匹配，201/202/251/252=其他场景，4xx/5xx=错误） |
+| statusCode | int | 业务状态码（200=成功且匹配，201/202/251/252=其他场景，4xx/5xx=错误） |
 | message | string | 操作结果描述信息 |
 | data | object/null | 成功时包含具体数据，失败时可能为 null 或包含错误详情 |
 
@@ -102,7 +102,7 @@ if (result.status_code === 200) {
 
 ### 成功/部分成功（2xx）
 
-| status_code | 含义 | 适用场景 | data 是否为空 |
+| statusCode | 含义 | 适用场景 | data 是否为空 |
 |-------------|------|---------|--------------|
 | **200** | 识别成功且匹配到人物 | match 不为空 | ✅ 有 data |
 | **201** | 未检测到人脸 | 图片有效但无人脸 | ❌ data 为 null |
@@ -110,14 +110,14 @@ if (result.status_code === 200) {
 
 ### 数据库相关（25x）
 
-| status_code | 含义 | 适用场景 | data 是否为空 |
+| statusCode | 含义 | 适用场景 | data 是否为空 |
 |-------------|------|---------|--------------|
 | **251** | 数据库为空 | 有 bbox 但 match 为空 | ✅ 有 data |
 | **252** | 未匹配到对象 | 相似度低于阈值 | ✅ 有 data |
 
 ### 客户端错误 - 图片数据相关（40x）
 
-| status_code | 含义 | 适用场景 | data 是否为空 |
+| statusCode | 含义 | 适用场景 | data 是否为空 |
 |-------------|------|---------|--------------|
 | **400** | 通用请求参数错误 | photos列表为空等 | ❌ data 为 null |
 | **401** | base64 解码失败 | base64 格式错误 | ❌ data 为 null |
@@ -126,7 +126,7 @@ if (result.status_code === 200) {
 
 ### 服务器错误（5xx）
 
-| status_code | 含义 | 适用场景 | data 是否为空 |
+| statusCode | 含义 | 适用场景 | data 是否为空 |
 |-------------|------|---------|--------------|
 | **501** | 人脸检测服务内部错误 | AI 引擎异常 | ❌ data 为 null |
 | **502** | 特征提取失败 | 特征提取服务异常 | ❌ data 为 null |
@@ -161,13 +161,13 @@ if (result.status_code === 200) {
 
 ### 响应场景详解
 
-#### **场景 1：识别成功且匹配到人物** → status_code=200
+#### **场景 1：识别成功且匹配到人物** → statusCode=200
 
 **条件**：`data.match` 不为空
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "识别成功",
   "data": {
     "has_face": true,
@@ -221,13 +221,13 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 2：未检测到人脸** → status_code=201
+#### **场景 2：未检测到人脸** → statusCode=201
 
 **条件**：图片有效但未检测到人脸
 
 ```json
 {
-  "status_code": 201,
+  "statusCode": 201,
   "message": "图像中未检测到人脸，请重新捕捉人脸",
   "data": null
 }
@@ -235,13 +235,13 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 3：人脸尺寸过小** → status_code=202
+#### **场景 3：人脸尺寸过小** → statusCode=202
 
 **条件**：检测到人脸但尺寸不足
 
 ```json
 {
-  "status_code": 202,
+  "statusCode": 202,
   "message": "人脸像素过小(60x60px)，无法识别",
   "data": {
     "has_face": true,
@@ -260,13 +260,13 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 4：数据库为空** → status_code=251
+#### **场景 4：数据库为空** → statusCode=251
 
 **条件**：检测到人脸但数据库中没有注册人员
 
 ```json
 {
-  "status_code": 251,
+  "statusCode": 251,
   "message": "数据库为空，请先录入人员信息",
   "data": {
     "has_face": true,
@@ -285,13 +285,13 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 5：未匹配到对象（相似度低于阈值）** → status_code=252
+#### **场景 5：未匹配到对象（相似度低于阈值）** → statusCode=252
 
 **条件**：检测到人脸且数据库有数据，但相似度均低于阈值
 
 ```json
 {
-  "status_code": 252,
+  "statusCode": 252,
   "message": "未找到匹配的人物（相似度低于阈值）",
   "data": {
     "has_face": true,
@@ -310,11 +310,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 6：base64 解码失败** → status_code=401
+#### **场景 6：base64 解码失败** → statusCode=401
 
 ```json
 {
-  "status_code": 401,
+  "statusCode": 401,
   "message": "base64 解码失败: Incorrect padding",
   "data": null
 }
@@ -322,11 +322,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 7：图片格式错误** → status_code=402
+#### **场景 7：图片格式错误** → statusCode=402
 
 ```json
 {
-  "status_code": 402,
+  "statusCode": 402,
   "message": "无法解析图片格式",
   "data": null
 }
@@ -334,11 +334,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 8：未接收到有效图片数据** → status_code=403
+#### **场景 8：未接收到有效图片数据** → statusCode=403
 
 ```json
 {
-  "status_code": 403,
+  "statusCode": 403,
   "message": "未接收到有效图片数据或图像数据存在异常",
   "data": null
 }
@@ -346,11 +346,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 9：人脸检测服务内部错误** → status_code=501
+#### **场景 9：人脸检测服务内部错误** → statusCode=501
 
 ```json
 {
-  "status_code": 501,
+  "statusCode": 501,
   "message": "人脸检测服务内部错误: <具体错误信息>",
   "data": null
 }
@@ -358,11 +358,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 10：特征提取失败** → status_code=502
+#### **场景 10：特征提取失败** → statusCode=502
 
 ```json
 {
-  "status_code": 502,
+  "statusCode": 502,
   "message": "人脸特征提取失败: <具体错误信息>",
   "data": null
 }
@@ -406,11 +406,11 @@ if (result.status_code === 200) {
 
 ### 响应场景详解
 
-#### **场景 1：识别成功且匹配到人物** → status_code=200
+#### **场景 1：识别成功且匹配到人物** → statusCode=200
 
 ```json
 {
-  "status_code": 200,
+  "statusCode": 200,
   "message": "批量识别成功",
   "data": {
     "total_frames": 2,
@@ -466,11 +466,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 2：photos 列表为空** → status_code=400
+#### **场景 2：photos 列表为空** → statusCode=400
 
 ```json
 {
-  "status_code": 400,
+  "statusCode": 400,
   "message": "photos 列表不能为空",
   "data": null
 }
@@ -478,11 +478,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 3：数据库为空** → status_code=251
+#### **场景 3：数据库为空** → statusCode=251
 
 ```json
 {
-  "status_code": 251,
+  "statusCode": 251,
   "message": "数据库为空，请先录入人员信息",
   "data": {
     "total_frames": 2,
@@ -497,11 +497,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 4：所有帧均未检测到有效人脸** → status_code=201
+#### **场景 4：所有帧均未检测到有效人脸** → statusCode=201
 
 ```json
 {
-  "status_code": 201,
+  "statusCode": 201,
   "message": "所有帧均未检测到有效人脸",
   "data": {
     "total_frames": 2,
@@ -529,11 +529,11 @@ if (result.status_code === 200) {
 
 ---
 
-#### **场景 5：未匹配到对象** → status_code=252
+#### **场景 5：未匹配到对象** → statusCode=252
 
 ```json
 {
-  "status_code": 252,
+  "statusCode": 252,
   "message": "识别失败，使用2帧有效图片，但相似度均低于阈值",
   "data": {
     "total_frames": 2,
@@ -570,10 +570,10 @@ async function callRecognizeApi(url, options) {
   const response = await fetch(url, options);
   const result = await response.json();  // HTTP 永远是 200
 
-  if (result.status_code === 200) {
+  if (result.statusCode === 200) {
     return { success: true, data: result.data };
   } else {
-    return { success: false, statusCode: result.status_code, message: result.message };
+    return { success: false, statusCode: result.statusCode, message: result.message };
   }
 }
 ```
@@ -590,7 +590,7 @@ async function recognizeFace(photo, targets = [], threshold = null) {
 
   const result = await response.json();
 
-  switch (result.status_code) {
+  switch (result.statusCode) {
     case 200:
       // 成功匹配
       return {
@@ -645,7 +645,7 @@ async function batchRecognize(photos, targets = [], threshold = null) {
 
   const result = await response.json();
 
-  if (result.status_code === 200) {
+  if (result.statusCode === 200) {
     // 识别成功
     return {
       success: true,
@@ -655,13 +655,13 @@ async function batchRecognize(photos, targets = [], threshold = null) {
       totalFrames: result.data.total_frames,
       message: result.data.message
     };
-  } else if (result.status_code === 201) {
+  } else if (result.statusCode === 201) {
     // 所有帧均无人脸
     return { success: false, reason: 'no_face', message: '所有图片均未检测到人脸' };
-  } else if (result.status_code === 251) {
+  } else if (result.statusCode === 251) {
     // 数据库为空
     return { success: false, reason: 'db_empty', message: '系统中暂无注册人员' };
-  } else if (result.status_code === 252) {
+  } else if (result.statusCode === 252) {
     // 未匹配
     return { success: false, reason: 'no_match', message: '未识别到已知人物' };
   } else {
@@ -690,12 +690,12 @@ function FaceRecognition() {
 
     const data = await response.json();
 
-    if (data.status_code === 200) {
+    if (data.statusCode === 200) {
       setResult(data.data);
       alert(`识别成功: ${data.data.match[0].name}`);
-    } else if (data.status_code === 201) {
+    } else if (data.statusCode === 201) {
       setError('未检测到人脸，请重新拍照');
-    } else if (data.status_code === 252) {
+    } else if (data.statusCode === 252) {
       setError('未识别到已知人物');
     } else {
       setError(data.message);
@@ -722,7 +722,7 @@ function FaceRecognition() {
 
 ### 共同的状态码
 
-| status_code | 含义 | `/recognize` | `/recognize/batch` |
+| statusCode | 含义 | `/recognize` | `/recognize/batch` |
 |-------------|------|:------------:|:------------------:|
 | **200** | 识别成功且匹配到人物 | ✅ | ✅ |
 | **201** | 未检测到人脸 | ✅ | ✅ |
@@ -731,7 +731,7 @@ function FaceRecognition() {
 
 ### 差异点
 
-| status_code | 含义 | `/recognize` | `/recognize/batch` | 说明 |
+| statusCode | 含义 | `/recognize` | `/recognize/batch` | 说明 |
 |-------------|------|:------------:|:------------------:|------|
 | **202** | 人脸尺寸过小 | ✅ | ❌ | 批量接口中记录在单帧的 `error` 字段 |
 | **400** | 请求参数错误 | ❌ | ✅ | 批量接口用于验证 photos 列表不能为空 |
@@ -757,7 +757,7 @@ function FaceRecognition() {
 2. **targets 匹配阈值**：使用 `threshold / 2` 作为候选阈值，但响应中的 `threshold` 仍是全局阈值
 3. **match 列表排序**：按相似度降序排列，`match[0]` 即最相似结果
 4. **similarity 格式**：百分比字符串（如 "87.45%"），便于直接展示
-5. **status_code 判断顺序**：
+5. **statusCode 判断顺序**：
    - 先判断 200（成功匹配）
    - 再判断 201/202（人脸相关）
    - 再判断 251/252（数据库相关）
@@ -786,7 +786,7 @@ function FaceRecognition() {
 
 | 版本 | 日期 | 变更内容 |
 |------|------|---------|
-| v5.0 | 2026-01-13 | **重大变更**: 统一响应格式，所有接口 HTTP 状态码永远返回 200，通过 `status_code` 字段区分成功/失败。新增细粒度状态码（201/202/251/252/401/402/403）。这是一个**破坏性变更**，需要客户端/前端适配。 |
+| v5.0 | 2026-01-13 | **重大变更**: 统一响应格式，所有接口 HTTP 状态码永远返回 200，通过 `statusCode` 字段区分成功/失败。新增细粒度状态码（201/202/251/252/401/402/403）。这是一个**破坏性变更**，需要客户端/前端适配。 |
 | v2.1 | 2026-01-09 | 更新响应结构（match 列表 + is_target），补充 batch 接口说明 |
 | v2.0 | 2026-01-06 | 统一返回 HTTP 200 + 结构化响应 |
 | v1.0 | - | 初始版本 |
