@@ -170,7 +170,7 @@ if (result.statusCode === 200) {
   "statusCode": 200,
   "message": "识别成功",
   "data": {
-    "has_face": true,
+    "hasFace": true,
     "bbox": {
       "x": 100,
       "y": 150,
@@ -203,7 +203,7 @@ if (result.statusCode === 200) {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| has_face | boolean | 是否检测到人脸 |
+| hasFace | boolean | 是否检测到人脸 |
 | bbox | object | 人脸框坐标 {x, y, w, h} |
 | threshold | float | 使用的识别阈值 |
 | match | array | 匹配结果列表（最多3个，按相似度降序） |
@@ -244,7 +244,7 @@ if (result.statusCode === 200) {
   "statusCode": 202,
   "message": "人脸像素过小(60x60px)，无法识别",
   "data": {
-    "has_face": true,
+    "hasFace": true,
     "bbox": {
       "x": 100,
       "y": 150,
@@ -269,7 +269,7 @@ if (result.statusCode === 200) {
   "statusCode": 251,
   "message": "数据库为空，请先录入人员信息",
   "data": {
-    "has_face": true,
+    "hasFace": true,
     "bbox": {
       "x": 100,
       "y": 150,
@@ -294,7 +294,7 @@ if (result.statusCode === 200) {
   "statusCode": 252,
   "message": "未找到匹配的人物（相似度低于阈值）",
   "data": {
-    "has_face": true,
+    "hasFace": true,
     "bbox": {
       "x": 100,
       "y": 150,
@@ -419,13 +419,13 @@ if (result.statusCode === 200) {
     "frames": [
       {
         "index": 0,
-        "has_face": true,
+        "hasFace": true,
         "bbox": {"x": 100, "y": 120, "w": 200, "h": 200},
         "error": null
       },
       {
         "index": 1,
-        "has_face": true,
+        "hasFace": true,
         "bbox": {"x": 110, "y": 130, "w": 190, "h": 190},
         "error": null
       }
@@ -460,7 +460,7 @@ if (result.statusCode === 200) {
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | index | int | 帧索引（从0开始） |
-| has_face | boolean | 是否检测到人脸 |
+| hasFace | boolean | 是否检测到人脸 |
 | bbox | object/null | 人脸框坐标（如果有） |
 | error | string/null | 错误信息（如果有） |
 
@@ -510,13 +510,13 @@ if (result.statusCode === 200) {
     "frames": [
       {
         "index": 0,
-        "has_face": false,
+        "hasFace": false,
         "bbox": null,
         "error": "未检测到人脸"
       },
       {
         "index": 1,
-        "has_face": false,
+        "hasFace": false,
         "bbox": null,
         "error": "未检测到人脸"
       }
@@ -542,13 +542,13 @@ if (result.statusCode === 200) {
     "frames": [
       {
         "index": 0,
-        "has_face": true,
+        "hasFace": true,
         "bbox": {"x": 100, "y": 120, "w": 200, "h": 200},
         "error": null
       },
       {
         "index": 1,
-        "has_face": true,
+        "hasFace": true,
         "bbox": {"x": 110, "y": 130, "w": 190, "h": 190},
         "error": null
       }

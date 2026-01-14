@@ -25,7 +25,7 @@ class RecognizeResp(BaseModel):
 class FrameInfo(BaseModel):
     """单帧图片的处理信息"""
     index: int
-    has_face: bool
+    hasFace: bool  # 改为驼峰命名
     bbox: Optional[BBox] = None
     error: Optional[str] = None
 

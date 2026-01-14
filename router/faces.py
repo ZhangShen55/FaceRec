@@ -86,7 +86,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             status_code=StatusCode.FACE_TOO_SMALL,
             message=f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别",
             data={
-                "has_face": True,
+                "hasFace": True,
                 "bbox": BBox(**bbox).model_dump() if bbox else None,
                 "threshold": threshold,
                 "match": None,
@@ -104,7 +104,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             status_code=StatusCode.DB_EMPTY,
             message="数据库为空，请先录入人员信息",
             data={
-                "has_face": True,
+                "hasFace": True,
                 "bbox": BBox(**bbox).model_dump() if bbox else None,
                 "threshold": threshold,
                 "match": None,
@@ -169,7 +169,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             status_code=StatusCode.NO_MATCH_FOUND,
             message="未找到匹配的人物（相似度低于阈值）",
             data={
-                "has_face": True,
+                "hasFace": True,
                 "bbox": BBox(**bbox).model_dump() if bbox else None,
                 "threshold": threshold,
                 "match": None,
@@ -205,7 +205,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     return ApiResponse.success(
         data={
-            "has_face": True,
+            "hasFace": True,
             "bbox": BBox(**bbox).model_dump() if bbox else None,
             "threshold": threshold,
             "match": [m.model_dump() for m in match_items],
@@ -263,7 +263,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
     for idx, photo_base64 in enumerate(request.photos):
         frame_result = {
             'index': idx,
-            'has_face': False,
+            'hasFace': False,
             'bbox': None,
             'error': None,
             'matches': []  # 该帧的 top3 匹配结果
@@ -288,7 +288,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
                 logger.info(f"[recognize/batch] 第{idx}帧: 未检测到人脸")
                 continue
 
-            frame_result['has_face'] = True
+            frame_result['hasFace'] = True
             frame_result['bbox'] = BBox(**bbox) if bbox else None
 
             # 验证人脸尺寸
@@ -352,7 +352,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
         logger.warning("[recognize/batch] 所有帧均未检测到有效人脸")
         frames_info = [FrameInfo(
             index=f['index'],
-            has_face=f['has_face'],
+            hasFace=f['hasFace'],
             bbox=f['bbox'],
             error=f['error']
         ) for f in frames_results]
@@ -414,7 +414,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
     # 第六步：构建响应
     frames_info = [FrameInfo(
         index=f['index'],
-        has_face=f['has_face'],
+        hasFace=f['hasFace'],
         bbox=f['bbox'],
         error=f['error']
     ) for f in frames_results]
