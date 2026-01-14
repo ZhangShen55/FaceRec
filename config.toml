@@ -33,3 +33,21 @@ log_path = "/app/logs/facere_service.log"  # 日志文件路径
 # 统计数据保留天数（自动清理超过该天数的数据）
 retention_days = 7  # 保留7天的详细日志
 hourly_retention_days = 30  # 保留30天的按小时聚合数据
+
+[redis]
+host = "localhost"  # Redis 服务器地址
+port = 6379  # Redis 端口
+password = ""  # Redis 密码（如果没有设置密码则留空）
+db = 0  # Redis 数据库编号（0-15）
+max_connections = 50  # 连接池最大连接数
+socket_timeout = 5  # Socket 超时时间（秒）
+socket_connect_timeout = 5  # Socket 连接超时时间（秒）
+decode_responses = true  # 是否自动解码响应为字符串
+
+[redis.cache]
+# 缓存配置
+embeddings_ttl = 0  # 人脸特征向量缓存过期时间（0表示永不过期，手动刷新）
+enable_embedding_cache = true  # 是否启用特征向量缓存
+refresh_on_startup = true  # 启动时是否自动加载人员信息到Redis
+refresh_interval_days = 7  # 定时全量刷新间隔（天）
+refresh_on_update = true  # 人员增删改时是否实时更新Redis

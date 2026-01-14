@@ -12,6 +12,8 @@ sqlmodel
 # MongoDB驱动
 motor
 pymongo
+# Redis 异步驱动
+redis[hiredis]>=5.0.0
 # 深度学习与图像处理
 numpy==1.23
 opencv-python
@@ -23,3 +25,4 @@ fastdeploy-gpu-python==1.0.7
 
 # 统计
 psutil
+

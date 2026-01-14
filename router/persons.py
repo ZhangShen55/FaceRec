@@ -14,6 +14,7 @@ from app.core.database import get_session
 from app.core.exceptions import DatabaseError
 from app.core.config import settings
 from app.services import person as person_crud
+from app.services.cache_service import cache_service
 from app.utils.image_loader import base64_to_mat
 from app.utils.utils_mongo import doc_to_person_read
 from app.core.logger import get_logger
@@ -128,6 +129,10 @@ async def create_person_api(
             doc, is_updated = await person_crud.update_or_create_person(db, person_dict)
             action = "更新" if is_updated else "创建"
             logger.info(f"[/persons] 人物 {request.name} {action}成功")
+
+            # 更新 Redis 缓存
+            await cache_service.update_person_cache(person_dict)
+
         except Exception as e:
             logger.error(f"[/persons] 数据库操作失败: {e}")
             return ApiResponse.error(
@@ -421,7 +426,11 @@ async def create_persons_batch_api(
                 }
             )
 
-    # 全部成功
+    # 全部成功 - 刷新缓存
+    success_count = len([r for r in results if r.id])
+    if success_count > 0:
+        await cache_service.update_person_cache({})  # 批量操作后统一刷新
+
     return ApiResponse.success(
         data={
             "persons": [
@@ -551,6 +560,10 @@ async def delete_person_general_api(
                         message="未找到匹配人物"
                     )
                 logger.info(f"[/persons/delete] 删除了 {deleted_count} 个人物: name={request.name}")
+
+                # 刷新 Redis 缓存
+                await cache_service.update_person_cache({})
+
                 return ApiResponse.success(
                     data={
                         "deleted_count": deleted_count,
@@ -576,6 +589,10 @@ async def delete_person_general_api(
                         message="未找到该人物"
                     )
                 logger.info(f"[/persons/delete] 删除人物成功: number={request.number}")
+
+                # 刷新 Redis 缓存
+                await cache_service.update_person_cache({})
+
                 return ApiResponse.success(
                     data={
                         "deleted_count": deleted_count,
@@ -601,6 +618,10 @@ async def delete_person_general_api(
                         message="未找到该人物"
                     )
                 logger.info(f"[/persons/delete] 删除人物成功: id={request.id}")
+
+                # 刷新 Redis 缓存
+                await cache_service.update_person_cache({})
+
                 return ApiResponse.success(
                     data={
                         "deleted_count": deleted_count,

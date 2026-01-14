@@ -57,6 +57,33 @@ class StatsSettings(BaseModel):
     retention_days: int = 7  # 详细日志保留天数
     hourly_retention_days: int = 30  # 按小时聚合数据保留天数
 
+class RedisCacheSettings(BaseModel):
+    """Redis 缓存配置"""
+    embeddings_ttl: int = 0  # 人脸特征向量缓存过期时间（0表示永不过期）
+    enable_embedding_cache: bool = True  # 是否启用特征向量缓存
+    refresh_on_startup: bool = True  # 启动时是否自动加载
+    refresh_interval_days: int = 7  # 定时全量刷新间隔（天）
+    refresh_on_update: bool = True  # 人员增删改时是否实时更新
+
+class RedisSettings(BaseModel):
+    """Redis 配置"""
+    host: str = "localhost"
+    port: int = 6379
+    password: str = ""
+    db: int = 0
+    max_connections: int = 50
+    socket_timeout: int = 5
+    socket_connect_timeout: int = 5
+    decode_responses: bool = True
+    cache: RedisCacheSettings = RedisCacheSettings()
+
+    @computed_field
+    def url(self) -> str:
+        """构建 Redis URL"""
+        if self.password:
+            return f"redis://:{self.password}@{self.host}:{self.port}/{self.db}"
+        return f"redis://{self.host}:{self.port}/{self.db}"
+
 class Settings(BaseModel):
     db: DBSettings
     face: FaceSettings
@@ -66,6 +93,7 @@ class Settings(BaseModel):
     feature_image: FeatureImageSettings
     logger: LoggerSettings
     stats: StatsSettings
+    redis: RedisSettings
 
 def load_config():
     logger.debug(f"Loading config from {config_path}")
@@ -77,6 +105,12 @@ def load_config():
 
     logger.debug(f"Config loaded: {config_data}")
 
+    # 处理 Redis 配置（包含嵌套的 cache 配置）
+    redis_config = config_data.get("redis", {})
+    if "cache" in redis_config:
+        redis_cache = RedisCacheSettings(**redis_config["cache"])
+        redis_config["cache"] = redis_cache
+
     return Settings(
         db=DBSettings(**config_data["db"]),
         face=FaceSettings(**config_data["face"]),
@@ -85,7 +119,8 @@ def load_config():
         frontlogin=FrontLoginSettings(**config_data["frontlogin"]),
         feature_image=FeatureImageSettings(**config_data["image"]),
         logger=LoggerSettings(**config_data["logger"]),
-        stats=StatsSettings(**config_data.get("stats", {}))  # 兼容旧配置
+        stats=StatsSettings(**config_data.get("stats", {})),  # 兼容旧配置
+        redis=RedisSettings(**redis_config) if redis_config else RedisSettings()  # 使用默认值
     )
 
 

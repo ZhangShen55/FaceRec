@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException
 from app.services import person
+from app.services.cache_service import cache_service
 from app.utils.image_loader import base64_to_mat
 from app.core import ai_engine
 from app.core.config import settings
@@ -96,7 +97,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     # 5. 预加载数据库数据（只有检测到人脸后才查询数据库，避免浪费）
     # logger.info("[recognize] 预加载数据库数据...")
-    all_docs = await person.get_embeddings_for_match(db)
+    all_docs = await cache_service.get_all_embeddings()  # 优先从 Redis 获取
 
     if not all_docs:
         logger.info("[recognize] 数据库中没有有效人脸特征")
@@ -235,7 +236,7 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
         )
 
     # 预加载数据库数据（避免每帧都查询）
-    all_docs = await person.get_embeddings_for_match(db)
+    all_docs = await cache_service.get_all_embeddings()  # 优先从 Redis 获取
     if not all_docs:
         logger.warning("[recognize/batch] 数据库中没有有效人脸特征")
         return ApiResponse.error(

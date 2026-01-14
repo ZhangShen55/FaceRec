@@ -17,6 +17,8 @@ from app.router import faces, persons, web, ops
 from app.core.logger import request_id_ctx, new_request_id
 from app.middleware import APIStatsMiddleware
 from app.models.api_response import StatusCode, ApiResponse
+from app.core.redis_client import RedisClient
+from app.services.cache_service import cache_service
 
 logger = get_logger(__name__)
 
@@ -35,7 +37,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("MongoDB ping failed: %s", e)
 
-    # 2. Dlib 进程池初始化 (注入到 ai_engine)
+    # 2. Redis 连接测试
+    try:
+        await RedisClient.ping()
+        logger.info("✅ Redis 连接成功")
+    except Exception as e:
+        logger.error(f"❌ Redis 连接失败: {e}")
+        logger.warning("⚠️  将在没有缓存的情况下运行")
+
+    # 3. 启动时加载人员特征到 Redis
+    if settings.redis.cache.enable_embedding_cache and settings.redis.cache.refresh_on_startup:
+        try:
+            count = await cache_service.reload_all_embeddings()
+            logger.info(f"✅ 启动时已加载 {count} 个人员特征到 Redis")
+        except Exception as e:
+            logger.error(f"❌ 启动时加载人员特征失败: {e}")
+
+    # 4. Dlib 进程池初始化 (注入到 ai_engine)
     # 确保 max_workers 设置合理 (建议 1 或 2，防止内存爆炸)
     # 当前 settings.thread.max_workers 建议设置为 2
     logger.info(f"Initializing Dlib Process Pool with {MAX_WORKERS} workers...")
@@ -50,7 +68,14 @@ async def lifespan(app: FastAPI):
     # ================= 关闭 (Shutdown) =================
     logger.info("系统关闭: 释放资源...")
 
-    # 3. 资源清理
+    # 5. 关闭 Redis 连接
+    try:
+        await RedisClient.close()
+        logger.info("✅ Redis 连接已关闭")
+    except Exception as e:
+        logger.error(f"❌ Redis 关闭失败: {e}")
+
+    # 6. 资源清理
     pool.shutdown(wait=True)
     ai_engine.GLOBAL_PROCESS_POOL = None
     logger.info("Dlib 进程池关闭成功.")
