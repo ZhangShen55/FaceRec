@@ -9,9 +9,24 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+# 在导入其他模块之前，先导入 config 来读取配置
+from app.core.config import settings
+
+# 如果 InsightFace 配置使用非 GPU 0，设置 CUDA_VISIBLE_DEVICES 环境变量
+# 让主进程只看到配置的 GPU，避免在 GPU 0 上初始化资源
+# 注意：这必须在导入 ai_engine 之前设置，因为导入可能会触发 GPU 初始化
+if hasattr(settings, 'face_detection') and settings.face_detection.detector.lower() == 'insightface':
+    if_config = settings.face_detection.insightface
+    if if_config.device.lower() == 'gpu' and if_config.gpu_id != 0:
+        # 如果 InsightFace 使用非 GPU 0，设置 CUDA_VISIBLE_DEVICES
+        # 设置后，原来的 GPU 1 会重新映射为 GPU 0
+        gpu_id = if_config.gpu_id
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        # 注意：子进程中需要使用 GPU 0（因为已经重新映射了），所以需要调整配置
+        # 但为了保持配置的一致性，我们在子进程中会读取原始配置并处理映射
+
 from app.core.database import db
 from app.core import ai_engine
-from app.core.config import settings
 from app.core.logger import get_logger
 from app.router import faces, persons, web, ops
 from app.core.logger import request_id_ctx, new_request_id

@@ -36,6 +36,19 @@ class ThreadSettings(BaseModel):
 class GpuSettings(BaseModel):
     gpu_id: int
 
+class InsightFaceSettings(BaseModel):
+    """InsightFace 配置"""
+    model_name: str = "buffalo_l"  # 模型名称: "buffalo_l" 或 "buffalo_s"
+    model_path: str = ""  # 模型文件路径（可选，留空则使用默认路径）
+    device: str = "gpu"  # 使用设备: "gpu" 或 "cpu"
+    gpu_id: int = 0  # GPU设备ID（仅在 device = "gpu" 时生效）
+    det_size: int = 640  # 检测尺寸
+
+class FaceDetectionSettings(BaseModel):
+    """人脸检测器配置"""
+    detector: str = "insightface"  # 检测器选择: "dlib" 或 "insightface"
+    insightface: InsightFaceSettings = InsightFaceSettings()
+
 class FrontLoginSettings(BaseModel):
     username: str
     password: str
@@ -87,6 +100,7 @@ class RedisSettings(BaseModel):
 class Settings(BaseModel):
     db: DBSettings
     face: FaceSettings
+    face_detection: FaceDetectionSettings = FaceDetectionSettings()  # 人脸检测器配置（可选）
     thread: ThreadSettings
     gpu: GpuSettings
     frontlogin: FrontLoginSettings
@@ -111,9 +125,18 @@ def load_config():
         redis_cache = RedisCacheSettings(**redis_config["cache"])
         redis_config["cache"] = redis_cache
 
+    # 处理人脸检测器配置（包含嵌套的 insightface 配置）
+    face_detection_config = config_data.get("face_detection", {})
+    if "insightface" in face_detection_config:
+        insightface_config = InsightFaceSettings(**face_detection_config["insightface"])
+        face_detection_config["insightface"] = insightface_config
+    else:
+        face_detection_config["insightface"] = InsightFaceSettings()
+
     return Settings(
         db=DBSettings(**config_data["db"]),
         face=FaceSettings(**config_data["face"]),
+        face_detection=FaceDetectionSettings(**face_detection_config) if face_detection_config else FaceDetectionSettings(),
         thread=ThreadSettings(**config_data["threading"]),
         gpu=GpuSettings(**config_data["gpu"]),
         frontlogin=FrontLoginSettings(**config_data["frontlogin"]),

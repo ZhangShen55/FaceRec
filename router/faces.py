@@ -51,7 +51,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
                 status_code=StatusCode.INVALID_IMAGE_FORMAT,
                 message=str(e.detail)
             )
-    logger.info(f"[性能] 解析图片耗时: {(time.time()-t_step)*1000:.2f}ms")
+    logger.info(f"[recognize] [性能] 解析图片耗时: {(time.time()-t_step)*1000:.2f}ms")
 
     if image_data is None or not isinstance(image_data, np.ndarray) or image_data.size == 0:
         logger.error(f"[recognize] 未接收到有效图片数据或图像数据存在异常")
@@ -74,7 +74,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     if face_image is None:
         logger.info(f"[recognize] 未检测到有效人脸")
-        logger.info(f"[性能] 总请求耗时: {(time.time()-t_total_start)*1000:.2f}ms")
+        logger.info(f"[recognize] [性能] 总请求耗时: {(time.time()-t_total_start)*1000:.2f}ms")
         return ApiResponse.error(
             status_code=StatusCode.NO_FACE_DETECTED,
             message="图像中未检测到人脸，请重新捕捉人脸"
@@ -97,7 +97,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
 
     # 5. 预加载数据库数据（只有检测到人脸后才查询数据库，避免浪费）
     # logger.info("[recognize] 预加载数据库数据...")
-    all_docs = await cache_service.get_all_embeddings()  # 优先从 Redis 获取
+    all_docs = await cache_service.get_all_embeddings()
 
     if not all_docs:
         logger.info("[recognize] 数据库中没有有效人脸特征")

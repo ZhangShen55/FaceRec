@@ -19,13 +19,9 @@ warnings.filterwarnings('ignore', category=FutureWarning, module='insightface')
 
 logger = get_logger(__name__)
 
-
-try:
-    import insightface
-    INSIGHTFACE_AVAILABLE = True
-except (ImportError, Exception) as e:
-    logger.debug(f"InsightFace不可用: {e}，将使用dlib（CPU计算）")
-    INSIGHTFACE_AVAILABLE = False
+# 延迟导入 InsightFace，避免在主进程中初始化 GPU 资源
+# 只在子进程中导入，这样可以避免主进程在 GPU 0 上创建不必要的资源
+INSIGHTFACE_AVAILABLE = None  # None 表示未检查，在子进程中检查
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 _SHAPE_PREDICTOR_PATH = str(BASE_DIR / 'ai_models' / 'shape_predictor_68_face_landmarks.dat')
@@ -47,44 +43,102 @@ def _init_dlib_worker():
     """
     子进程的初始化函数。
     当 ProcessPoolExecutor 创建一个新的子进程时，会立刻运行这个函数。
-    优先使用InsightFace（GPU加速），如果不可用则降级到dlib。
+    根据配置文件选择使用 InsightFace 或 dlib。
     """
     global _mp_detector, _mp_predictor, _use_insightface
     
-    # 在子进程中再次检查InsightFace是否可用（因为子进程可能环境不同）
-    insightface_available = False
-    try:
-        import insightface
-        insightface_available = True
-    except (ImportError, Exception):
-        insightface_available = False
+    # 从配置读取检测器选择
+    detector_choice = settings.face_detection.detector.lower()
     
-    if insightface_available:
+    if detector_choice == "insightface":
+        # 尝试使用 InsightFace（在子进程中导入，避免主进程初始化 GPU）
+        insightface_available = False
         try:
-            logger.info(f"[Worker PID: {os.getpid()}] 正在加载 InsightFace 模型（GPU加速）...")
-            # InsightFace初始化（优先使用GPU，如果不可用则降级到CPU）
-            # providers=['CUDAExecutionProvider', 'CPUExecutionProvider'] 优先GPU，降级CPU
-
-            _mp_detector = insightface.app.FaceAnalysis(
-                name='buffalo_l',  # 或 'buffalo_s' (更小更快)
-                providers=['CUDAExecutionProvider', 'CPUExecutionProvider']  # 优先GPU，降级CPU
-            )
-            # ctx_id: -1表示CPU，0-N表示GPU编号
-            # 先尝试GPU，如果失败会自动降级到CPU
+            import insightface
+            # 设置 ONNX Runtime 日志级别，减少输出
+            import os
+            os.environ.setdefault('ORT_LOGGING_LEVEL', '3')
+            insightface_available = True
+        except (ImportError, Exception) as e:
+            logger.warning(f"[Worker PID: {os.getpid()}] InsightFace 不可用（缺少依赖或未安装）: {e}，将降级到 dlib")
+            insightface_available = False
+        
+        if insightface_available:
             try:
-                _mp_detector.prepare(ctx_id=0, det_size=(640, 640))  # ctx_id=0 表示GPU 0
-                logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成（使用GPU）")
-            except Exception as gpu_error:
-                logger.warning(f"[Worker PID: {os.getpid()}] GPU不可用，降级到CPU: {gpu_error}")
-                _mp_detector.prepare(ctx_id=-1, det_size=(640, 640))  # ctx_id=-1 表示CPU
-                logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成（使用CPU）")
-            _use_insightface = True
-        except Exception as e:
-            logger.warning(f"[Worker PID: {os.getpid()}] InsightFace 加载失败，降级到dlib: {e}", exc_info=True)
+                # 读取 InsightFace 配置
+                if_config = settings.face_detection.insightface
+                model_name = if_config.model_name
+                device = if_config.device.lower()
+                config_gpu_id = if_config.gpu_id  # 配置中的 GPU ID
+                det_size = if_config.det_size
+                
+                # 检查是否设置了 CUDA_VISIBLE_DEVICES（主进程可能已经设置了）
+                cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+                if cuda_visible_devices:
+                    # 如果设置了 CUDA_VISIBLE_DEVICES，GPU 会重新映射
+                    # 原来的 GPU 1 会变成 GPU 0，所以子进程中使用 GPU 0
+                    actual_gpu_id = 0
+                    original_gpu_id = config_gpu_id
+                else:
+                    # 如果没有设置，使用配置的 GPU ID
+                    actual_gpu_id = config_gpu_id
+                    original_gpu_id = config_gpu_id
+                
+                logger.info(f"[Worker PID: {os.getpid()}] 正在加载 InsightFace 模型（{model_name}, device={device}, det_size={det_size}, GPU={original_gpu_id}）...")
+                
+                if device == "gpu":
+                    # 在 providers 中指定 device_id，使用实际映射后的 GPU ID
+                    providers = [
+                        ('CUDAExecutionProvider', {'device_id': actual_gpu_id}),  # 使用映射后的 GPU ID
+                        'CPUExecutionProvider'  # 降级CPU
+                    ]
+                    ctx_id = actual_gpu_id  # ctx_id 也设置为映射后的 GPU 编号
+                    device_desc = f"GPU {original_gpu_id} (映射后: {actual_gpu_id})"
+                else:
+                    providers = ['CPUExecutionProvider']  # 仅CPU
+                    ctx_id = -1  # -1表示CPU
+                    device_desc = "CPU"
+                
+                _mp_detector = insightface.app.FaceAnalysis(
+                    name=model_name,
+                    providers=providers,
+                    root=if_config.model_path if if_config.model_path else None
+                )
+                
+                # 准备模型
+                try:
+                    _mp_detector.prepare(ctx_id=ctx_id, det_size=(det_size, det_size))
+                    logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成（使用{device_desc}）")
+                    _use_insightface = True
+                except Exception as prepare_error:
+                    if device == "gpu":
+                        # GPU失败，尝试降级到CPU
+                        logger.warning(f"[Worker PID: {os.getpid()}] GPU不可用，降级到CPU: {prepare_error}")
+                        try:
+                            _mp_detector.prepare(ctx_id=-1, det_size=(det_size, det_size))
+                            logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成（使用CPU，已降级）")
+                            _use_insightface = True
+                        except Exception as cpu_error:
+                            logger.error(f"[Worker PID: {os.getpid()}] InsightFace CPU加载也失败: {cpu_error}")
+                            _use_insightface = False
+                            _init_dlib_fallback()
+                    else:
+                        # CPU也失败
+                        logger.error(f"[Worker PID: {os.getpid()}] InsightFace 加载失败: {prepare_error}")
+                        _use_insightface = False
+                        _init_dlib_fallback()
+            except Exception as e:
+                logger.warning(f"[Worker PID: {os.getpid()}] InsightFace 初始化失败，降级到dlib: {e}", exc_info=True)
+                _use_insightface = False
+                _init_dlib_fallback()
+        else:
+            # InsightFace不可用，降级到dlib
+            logger.info(f"[Worker PID: {os.getpid()}] InsightFace 不可用，使用 dlib")
             _use_insightface = False
             _init_dlib_fallback()
     else:
-        logger.info(f"[Worker PID: {os.getpid()}] InsightFace 不可用（缺少依赖或未安装），使用 dlib")
+        # 使用 dlib
+        logger.info(f"[Worker PID: {os.getpid()}] 配置使用 dlib 检测器")
         _use_insightface = False
         _init_dlib_fallback()
 
@@ -152,25 +206,24 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
                 if hasattr(face, 'get_norm_crop_img') and callable(face.get_norm_crop_img):
                     aligned = face.get_norm_crop_img(image)
                 # 方法2: 使用insightface.utils.face_align.norm_crop
-                elif hasattr(insightface, 'utils') and hasattr(insightface.utils, 'face_align'):
-                    from insightface.utils import face_align
-                    aligned = face_align.norm_crop(image, landmark=face.kps)
-                # 方法3: 使用cv2进行对齐（基于5个关键点）
                 else:
-                    # 从face.kps获取5个关键点（左眼、右眼、鼻尖、左嘴角、右嘴角）
-                    landmark = face.kps.astype(np.float32)
-                    # 标准的112x112对齐模板点（ArcFace对齐标准）
-                    dst_points = np.array([
-                        [38.2946, 51.6963],  # 左眼中心
-                        [73.5318, 51.5014],  # 右眼中心
-                        [56.0252, 71.7366],  # 鼻尖
-                        [41.5493, 92.3655],  # 左嘴角
-                        [70.7299, 92.2041]   # 右嘴角
-                    ], dtype=np.float32)
-                    # 使用相似变换（similarity transform）以保持比例
-                    # 计算变换矩阵（基于前3个点：左眼、右眼、鼻尖）
-                    transform_matrix = cv2.getAffineTransform(landmark[:3], dst_points[:3])
-                    aligned = cv2.warpAffine(image, transform_matrix, (112, 112), borderValue=0)
+                    # 在子进程中导入 insightface（已经在 _init_dlib_worker 中导入过）
+                    import insightface
+                    if hasattr(insightface, 'utils') and hasattr(insightface.utils, 'face_align'):
+                        from insightface.utils import face_align
+                        aligned = face_align.norm_crop(image, landmark=face.kps)
+                    else:
+                        # 方法3: 使用cv2进行对齐（基于5个关键点）
+                        landmark = face.kps.astype(np.float32)
+                        dst_points = np.array([
+                            [38.2946, 51.6963],  # 左眼中心
+                            [73.5318, 51.5014],  # 右眼中心
+                            [56.0252, 71.7366],  # 鼻尖
+                            [41.5493, 92.3655],  # 左嘴角
+                            [70.7299, 92.2041]   # 右嘴角
+                        ], dtype=np.float32)
+                        transform_matrix = cv2.getAffineTransform(landmark[:3], dst_points[:3])
+                        aligned = cv2.warpAffine(image, transform_matrix, (112, 112), borderValue=0)
             except Exception as align_error:
                 logger.error(f"[Worker PID: {os.getpid()}] 人脸对齐失败: {align_error}", exc_info=True)
                 return None, None, None
@@ -331,9 +384,23 @@ def _get_embedding_model() -> fd.vision.faceid.ArcFace:
             _embedding_model_loading = True
             logger.info(f"[GPU模型] 进程 {os.getpid()} 开始延迟加载GPU模型...")
             
-            GPU_ID = int(settings.gpu.gpu_id)
+            # 检查是否设置了 CUDA_VISIBLE_DEVICES（主进程可能已经设置了）
+            config_gpu_id = int(settings.gpu.gpu_id)  # 配置中的 GPU ID
+            cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+            
+            if cuda_visible_devices:
+                # 如果设置了 CUDA_VISIBLE_DEVICES，GPU 会重新映射
+                # 原来的 GPU 1 会变成 GPU 0，所以使用 GPU 0（映射后的）
+                actual_gpu_id = 0
+                original_gpu_id = config_gpu_id
+            else:
+                # 如果没有设置，使用配置的 GPU ID
+                actual_gpu_id = config_gpu_id
+                original_gpu_id = config_gpu_id
+            
+            logger.info(f"[GPU模型] Embedding模型使用 GPU {original_gpu_id} (映射后: {actual_gpu_id})")
             option = fd.RuntimeOption()
-            option.use_gpu(GPU_ID)
+            option.use_gpu(actual_gpu_id)
             _embedding_model = fd.vision.faceid.ArcFace(
                 str(BASE_DIR / 'ai_models' / 'ms1mv3_arcface_r100.onnx'),
                 runtime_option=option
