@@ -15,8 +15,8 @@ import json
 
 # 测试配置
 API_URL = "http://localhost:8004/recognize"
-IMAGE_PATH = "/root/workspace/FaceRecAPI_DEV/app/tests/常泽宇.jpg"
-CONCURRENT_REQUESTS = 1  # 并发数
+IMAGE_PATH = "/root/workspace/FaceRecAPI_DEV/app/tests/常泽宇.png"
+CONCURRENT_REQUESTS = 100  # 并发数
 THRESHOLD = 0.25  # 识别阈值
 
 # 统计数据
