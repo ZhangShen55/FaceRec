@@ -58,7 +58,7 @@ db = 0  # Redis 数据库编号（0-15）
 max_connections = 500  # 连接池最大连接数
 socket_timeout = 30  # Socket 超时时间（秒）
 socket_connect_timeout = 10  # Socket 连接超时时间（秒）
-decode_responses = true  # 是否自动解码响应为字符串
+decode_responses = false  # 是否自动解码响应为字符串（false 以支持二进制数据如 Pickle）
 
 [redis.cache]
 # 缓存配置
