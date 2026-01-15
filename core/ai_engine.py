@@ -12,6 +12,10 @@ from concurrent.futures import ProcessPoolExecutor
 import threading
 from app.core.config import settings
 from app.core.logger import get_logger
+import warnings
+
+# 过滤InsightFace库中NumPy的FutureWarning，这个警告其实不影响使用，但看着膈应
+warnings.filterwarnings('ignore', category=FutureWarning, module='insightface')
 
 logger = get_logger(__name__)
 
@@ -20,7 +24,7 @@ try:
     import insightface
     INSIGHTFACE_AVAILABLE = True
 except (ImportError, Exception) as e:
-    logger.debug(f"InsightFace不可用: {e}，将使用dlib")
+    logger.debug(f"InsightFace不可用: {e}，将使用dlib（CPU计算）")
     INSIGHTFACE_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -58,17 +62,23 @@ def _init_dlib_worker():
     if insightface_available:
         try:
             logger.info(f"[Worker PID: {os.getpid()}] 正在加载 InsightFace 模型（GPU加速）...")
-            # InsightFace初始化（自动使用GPU如果可用）
-            # providers=['CUDAExecutionProvider'] 表示使用GPU
-            # providers=['CPUExecutionProvider'] 表示使用CPU
+            # InsightFace初始化（优先使用GPU，如果不可用则降级到CPU）
+            # providers=['CUDAExecutionProvider', 'CPUExecutionProvider'] 优先GPU，降级CPU
 
             _mp_detector = insightface.app.FaceAnalysis(
                 name='buffalo_l',  # 或 'buffalo_s' (更小更快)
-                providers=['CUDAExecutionProvider']  # 优先GPU
+                providers=['CUDAExecutionProvider', 'CPUExecutionProvider']  # 优先GPU，降级CPU
             )
-            _mp_detector.prepare(ctx_id=0, det_size=(640, 640))  # ctx_id=0 表示GPU 0
+            # ctx_id: -1表示CPU，0-N表示GPU编号
+            # 先尝试GPU，如果失败会自动降级到CPU
+            try:
+                _mp_detector.prepare(ctx_id=0, det_size=(640, 640))  # ctx_id=0 表示GPU 0
+                logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成（使用GPU）")
+            except Exception as gpu_error:
+                logger.warning(f"[Worker PID: {os.getpid()}] GPU不可用，降级到CPU: {gpu_error}")
+                _mp_detector.prepare(ctx_id=-1, det_size=(640, 640))  # ctx_id=-1 表示CPU
+                logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成（使用CPU）")
             _use_insightface = True
-            logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成")
         except Exception as e:
             logger.warning(f"[Worker PID: {os.getpid()}] InsightFace 加载失败，降级到dlib: {e}", exc_info=True)
             _use_insightface = False
@@ -115,7 +125,6 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
             faces = _mp_detector.get(image)
     
             logger.info(f"[性能] InsightFace检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
-            logger.info(f"[InsightFace] 检测结果所有: {faces[0]}")
 
             if not faces:
                 logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
@@ -136,8 +145,35 @@ def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], 
 
             logger.info(f"[InsightFace] 人脸像素大小: {w}x{h}")
 
-            # InsightFace直接提供对齐后的人脸（112x112）
-            aligned = face.norm_crop(image)  # 已经是112x112的BGR图像
+            # InsightFace获取对齐后的人脸（112x112）
+            # 使用face对象的get_norm_crop_img方法或者使用face_align工具
+            try:
+                # 方法1: 尝试使用face.get_norm_crop_img（如果存在）
+                if hasattr(face, 'get_norm_crop_img') and callable(face.get_norm_crop_img):
+                    aligned = face.get_norm_crop_img(image)
+                # 方法2: 使用insightface.utils.face_align.norm_crop
+                elif hasattr(insightface, 'utils') and hasattr(insightface.utils, 'face_align'):
+                    from insightface.utils import face_align
+                    aligned = face_align.norm_crop(image, landmark=face.kps)
+                # 方法3: 使用cv2进行对齐（基于5个关键点）
+                else:
+                    # 从face.kps获取5个关键点（左眼、右眼、鼻尖、左嘴角、右嘴角）
+                    landmark = face.kps.astype(np.float32)
+                    # 标准的112x112对齐模板点（ArcFace对齐标准）
+                    dst_points = np.array([
+                        [38.2946, 51.6963],  # 左眼中心
+                        [73.5318, 51.5014],  # 右眼中心
+                        [56.0252, 71.7366],  # 鼻尖
+                        [41.5493, 92.3655],  # 左嘴角
+                        [70.7299, 92.2041]   # 右嘴角
+                    ], dtype=np.float32)
+                    # 使用相似变换（similarity transform）以保持比例
+                    # 计算变换矩阵（基于前3个点：左眼、右眼、鼻尖）
+                    transform_matrix = cv2.getAffineTransform(landmark[:3], dst_points[:3])
+                    aligned = cv2.warpAffine(image, transform_matrix, (112, 112), borderValue=0)
+            except Exception as align_error:
+                logger.error(f"[Worker PID: {os.getpid()}] 人脸对齐失败: {align_error}", exc_info=True)
+                return None, None, None
 
             if not aligned.flags['C_CONTIGUOUS']:
                 aligned = np.ascontiguousarray(aligned)
