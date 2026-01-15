@@ -18,6 +18,9 @@ redis[hiredis]>=5.0.0
 numpy==1.23
 opencv-python
 dlib
+insightface==0.7.3
+onnxruntime-gpu==1.23.2
+#onnxruntime==1.23.2 # cpu版本
 
 # GPU版FastDeploy（如要CPU版可改成 fastdeploy-python==1.0.7）
 fastdeploy-gpu-python==1.0.7

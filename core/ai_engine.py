@@ -9,94 +9,189 @@ import dlib
 import numpy as np
 import fastdeploy as fd
 from concurrent.futures import ProcessPoolExecutor
+import threading
 from app.core.config import settings
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+try:
+    import insightface
+    INSIGHTFACE_AVAILABLE = True
+except (ImportError, Exception) as e:
+    logger.debug(f"InsightFace不可用: {e}，将使用dlib")
+    INSIGHTFACE_AVAILABLE = False
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 _SHAPE_PREDICTOR_PATH = str(BASE_DIR / 'ai_models' / 'shape_predictor_68_face_landmarks.dat')
 
-# embadding模型全局加载加载
-GPU_ID = int(settings.gpu.gpu_id)
-option = fd.RuntimeOption()
-option.use_gpu(GPU_ID)
-embedding_model = fd.vision.faceid.ArcFace(str(BASE_DIR / 'ai_models' / 'ms1mv3_arcface_r100.onnx'),
-                                           runtime_option=option)
+# GPU模型延迟加载（避免子进程继承）
+_embedding_model: Optional[fd.vision.faceid.ArcFace] = None
+_embedding_model_lock = threading.Lock()
+_embedding_model_loading = False
 
 # 定义全局变量，会被main.py初始化
 GLOBAL_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
 
 # 定义子进程的全局变量
-_mp_detector = None
-_mp_predictor = None
+_mp_detector = None  # InsightFace app或dlib检测器
+_mp_predictor = None  # dlib关键点预测器（仅当使用dlib时）
+_use_insightface = False  # 是否使用InsightFace
 
 def _init_dlib_worker():
     """
     子进程的初始化函数。
     当 ProcessPoolExecutor 创建一个新的子进程时，会立刻运行这个函数。
-    在这里加载模型，确保每个进程有一份独立的模型，互不干扰。
+    优先使用InsightFace（GPU加速），如果不可用则降级到dlib。
     """
-    global _mp_detector, _mp_predictor
-    logger.info(f"[Worker PID: {os.getpid()}] 正在加载 Dlib 模型...")
+    global _mp_detector, _mp_predictor, _use_insightface
+    
+    # 在子进程中再次检查InsightFace是否可用（因为子进程可能环境不同）
+    insightface_available = False
     try:
+        import insightface
+        insightface_available = True
+    except (ImportError, Exception):
+        insightface_available = False
+    
+    if insightface_available:
+        try:
+            logger.info(f"[Worker PID: {os.getpid()}] 正在加载 InsightFace 模型（GPU加速）...")
+            # InsightFace初始化（自动使用GPU如果可用）
+            # providers=['CUDAExecutionProvider'] 表示使用GPU
+            # providers=['CPUExecutionProvider'] 表示使用CPU
+
+            _mp_detector = insightface.app.FaceAnalysis(
+                name='buffalo_l',  # 或 'buffalo_s' (更小更快)
+                providers=['CUDAExecutionProvider']  # 优先GPU
+            )
+            _mp_detector.prepare(ctx_id=0, det_size=(640, 640))  # ctx_id=0 表示GPU 0
+            _use_insightface = True
+            logger.info(f"[Worker PID: {os.getpid()}] InsightFace 模型加载完成")
+        except Exception as e:
+            logger.warning(f"[Worker PID: {os.getpid()}] InsightFace 加载失败，降级到dlib: {e}", exc_info=True)
+            _use_insightface = False
+            _init_dlib_fallback()
+    else:
+        logger.info(f"[Worker PID: {os.getpid()}] InsightFace 不可用（缺少依赖或未安装），使用 dlib")
+        _use_insightface = False
+        _init_dlib_fallback()
+
+def _init_dlib_fallback():
+    """dlib降级方案（保持原有逻辑）"""
+    global _mp_detector, _mp_predictor
+    try:
+        logger.info(f"[Worker PID: {os.getpid()}] 正在加载 Dlib 模型...")
         _mp_detector = dlib.get_frontal_face_detector()
         _mp_predictor = dlib.shape_predictor(_SHAPE_PREDICTOR_PATH)
         logger.info(f"[Worker PID: {os.getpid()}] Dlib 模型加载完成")
     except Exception as e:
-        logger.info(f"[Worker PID: {os.getpid()}] 模型加载失败: {e}")
+        logger.error(f"[Worker PID: {os.getpid()}] Dlib 模型加载失败: {e}")
+        raise
 
 
 def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
     """
-    真实的dlib计算的函数的，运行在子进程中。
+    人脸检测和对齐实现（支持InsightFace和dlib）
+    运行在子进程中。
     """
     import time
     t_start = time.time()
 
-    # 使用子进程局部的模型
-    global _mp_detector, _mp_predictor
-    tip = "人脸特征像素正常，可以使用" # 图像质量提示信息
-    if _mp_detector is None or _mp_predictor is None:
-        logger.error(f"[Worker PID: {os.getpid()}] Dlib 模型未加载，请检查是否子进程初始化失败")
+    global _mp_detector, _mp_predictor, _use_insightface
+    tip = "人脸特征像素正常，可以使用"
+    
+    if _mp_detector is None:
+        logger.error(f"[Worker PID: {os.getpid()}] 检测器未加载")
         return None, None, None
 
-    # 转灰度cpu计算
-    t0 = time.time()
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    logger.info(f"[性能] 灰度转换耗时: {(time.time()-t0)*1000:.2f}ms")
+    if _use_insightface:
+        # ========== InsightFace路径（GPU加速） ==========
+        t1 = time.time()
+        try:
+            # InsightFace检测（一步完成检测+对齐）
+            # 输入：BGR格式的numpy数组
+            faces = _mp_detector.get(image)
+    
+            logger.info(f"[性能] InsightFace检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
+            logger.info(f"[InsightFace] 检测结果所有: {faces[0]}")
 
-    # 1. 检测人脸cpu计算（upsample=0 避免无人脸时过多上采样导致响应缓慢）
-    t1 = time.time()
-    faces = _mp_detector(gray, 1)
-    logger.info(f"[性能] 人脸检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
+            if not faces:
+                logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
+                return None, None, None
 
-    if not faces:
-        logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
-        return None, None, None
+            # 选择面积最大的人脸
+            face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+            # logger.info(f"[InsightFace] 最大人脸坐标: {face}")
 
-    # 选择最大人脸
-    face = max(faces, key=lambda r: r.width() * r.height())
-    (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
+            # 提取边界框 [x1, y1, x2, y2]
+            bbox_coords = face.bbox.astype(int)
+            x, y, x2, y2 = bbox_coords[0], bbox_coords[1], bbox_coords[2], bbox_coords[3]
+            w = x2 - x
+            h = y2 - y
 
-    if w < 200 or h < 200:
-        tip = "人脸特征像素过低，或影响检测效果"
+            if w < 200 or h < 200:
+                tip = "人脸特征像素过低，或影响检测效果"
 
-    logger.info(f"[dlib] 人脸像素大小: {w}x{h}")
-    # 2. 关键点
-    shape = _mp_predictor(gray, face)
+            logger.info(f"[InsightFace] 人脸像素大小: {w}x{h}")
 
-    # _shape_to_np, _five_from_68, _align_by_5pts 应为纯函数
-    lm68 = _shape_to_np(shape)
-    lm5 = _five_from_68(lm68)
-    aligned = _align_by_5pts(image, lm5, (112, 112))
+            # InsightFace直接提供对齐后的人脸（112x112）
+            aligned = face.norm_crop(image)  # 已经是112x112的BGR图像
 
-    if not aligned.flags['C_CONTIGUOUS']:
-        aligned = np.ascontiguousarray(aligned)
+            if not aligned.flags['C_CONTIGUOUS']:
+                aligned = np.ascontiguousarray(aligned)
 
-    bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
+            bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
 
-    return aligned, bbox, tip
+            return aligned, bbox, tip
+
+        except Exception as e:
+            logger.error(f"[Worker PID: {os.getpid()}] InsightFace检测失败: {e}", exc_info=True)
+            return None, None, None
+
+    else:
+        # ========== Dlib路径（原有逻辑，保持不变） ==========
+        if _mp_predictor is None:
+            logger.error(f"[Worker PID: {os.getpid()}] Dlib 模型未加载，请检查是否子进程初始化失败")
+            return None, None, None
+
+        # 转灰度cpu计算
+        t0 = time.time()
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        logger.info(f"[性能] 灰度转换耗时: {(time.time()-t0)*1000:.2f}ms")
+
+        # 1. 检测人脸cpu计算（upsample=0 避免无人脸时过多上采样导致响应缓慢）
+        t1 = time.time()
+        faces = _mp_detector(gray, 1)
+        logger.info(f"[性能] 人脸检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
+
+        if not faces:
+            logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
+            return None, None, None
+
+        # 选择最大人脸
+        face = max(faces, key=lambda r: r.width() * r.height())
+        (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
+
+        if w < 200 or h < 200:
+            tip = "人脸特征像素过低，或影响检测效果"
+
+        logger.info(f"[dlib] 人脸像素大小: {w}x{h}")
+        # 2. 关键点
+        shape = _mp_predictor(gray, face)
+
+        # _shape_to_np, _five_from_68, _align_by_5pts 应为纯函数
+        lm68 = _shape_to_np(shape)
+        lm5 = _five_from_68(lm68)
+        aligned = _align_by_5pts(image, lm5, (112, 112))
+
+        if not aligned.flags['C_CONTIGUOUS']:
+            aligned = np.ascontiguousarray(aligned)
+
+        bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
+
+        return aligned, bbox, tip
 
 
 async def detect_and_extract_face(image: np.ndarray):
@@ -166,8 +261,64 @@ async def get_embedding(face_aligned: np.ndarray) -> np.ndarray:
     emb_q = emb / (np.linalg.norm(emb) + 1e-12)
     return emb_q
 
+def _get_embedding_model() -> fd.vision.faceid.ArcFace:
+    """
+    延迟加载GPU模型（单例模式，线程安全）
+    避免在模块导入时加载，防止ProcessPoolExecutor子进程继承GPU模型引用
+    
+    Returns:
+        ArcFace模型实例
+    """
+    global _embedding_model, _embedding_model_loading
+    
+    # 双重检查锁定模式（Double-Checked Locking）
+    if _embedding_model is not None:
+        return _embedding_model
+    
+    with _embedding_model_lock:
+        # 再次检查（避免多线程竞争）
+        if _embedding_model is not None:
+            return _embedding_model
+        
+        # 防止重复加载
+        if _embedding_model_loading:
+            # 如果正在加载，等待加载完成
+            while _embedding_model_loading:
+                _embedding_model_lock.release()
+                import time
+                time.sleep(0.01)  # 短暂等待
+                _embedding_model_lock.acquire()
+            if _embedding_model is not None:
+                return _embedding_model
+        
+        try:
+            _embedding_model_loading = True
+            logger.info(f"[GPU模型] 进程 {os.getpid()} 开始延迟加载GPU模型...")
+            
+            GPU_ID = int(settings.gpu.gpu_id)
+            option = fd.RuntimeOption()
+            option.use_gpu(GPU_ID)
+            _embedding_model = fd.vision.faceid.ArcFace(
+                str(BASE_DIR / 'ai_models' / 'ms1mv3_arcface_r100.onnx'),
+                runtime_option=option
+            )
+            
+            logger.info(f"[GPU模型] 进程 {os.getpid()} GPU模型加载完成")
+            return _embedding_model
+            
+        except Exception as e:
+            logger.error(f"[GPU模型] 进程 {os.getpid()} GPU模型加载失败: {e}", exc_info=True)
+            raise
+        finally:
+            _embedding_model_loading = False
+
+
 def get_embedding_sync(face_aligned: np.ndarray) -> np.ndarray:
-    """同步获取特征向量的方法"""
+    """
+    同步获取特征向量的方法
+    使用延迟加载的GPU模型
+    """
+    embedding_model = _get_embedding_model()  # 延迟加载
     result = embedding_model.predict(face_aligned)
     emb = np.asarray(result.embedding, dtype=np.float32)
     # 再做一次归一化
@@ -187,10 +338,21 @@ def find_best_match_embedding(emb_q: np.ndarray, candidate_docs: List[dict]) -> 
         e = d.get("embedding")
         if e is None: continue
 
-        # BSON Binary -> bytes -> numpy
-        if isinstance(e, Binary):
-            e = bytes(e)
-        vec = np.frombuffer(e, dtype=np.float32)
+        # 处理不同格式的embedding：
+        # 1. numpy数组（从Redis缓存读取）
+        if isinstance(e, np.ndarray):
+            vec = e.astype(np.float32).flatten()
+        # 2. BSON Binary类型（从MongoDB直接读取）
+        elif isinstance(e, Binary):
+            vec = np.frombuffer(bytes(e), dtype=np.float32)
+        # 3. bytes类型
+        elif isinstance(e, bytes):
+            vec = np.frombuffer(e, dtype=np.float32)
+        # 4. list类型（理论上不应该出现，但为了健壮性保留）
+        elif isinstance(e, list):
+            vec = np.array(e, dtype=np.float32)
+        else:
+            continue
 
         if vec.size != 512: continue
 
@@ -232,10 +394,21 @@ def find_top_matches(emb_q: np.ndarray, candidate_docs: List[dict], top_k: int =
         if e is None:
             continue
 
-        # BSON Binary -> bytes -> numpy
-        if isinstance(e, Binary):
-            e = bytes(e)
-        vec = np.frombuffer(e, dtype=np.float32)
+        # 处理不同格式的embedding：
+        # 1. numpy数组（从Redis缓存读取）
+        if isinstance(e, np.ndarray):
+            vec = e.astype(np.float32).flatten()
+        # 2. BSON Binary类型（从MongoDB直接读取）
+        elif isinstance(e, Binary):
+            vec = np.frombuffer(bytes(e), dtype=np.float32)
+        # 3. bytes类型
+        elif isinstance(e, bytes):
+            vec = np.frombuffer(e, dtype=np.float32)
+        # 4. list类型（理论上不应该出现，但为了健壮性保留）
+        elif isinstance(e, list):
+            vec = np.array(e, dtype=np.float32)
+        else:
+            continue
 
         if vec.size != 512:
             continue
