@@ -155,6 +155,149 @@ def _init_dlib_fallback():
         raise
 
 
+def _dlib_multi_face_task_implementation(image: np.ndarray) -> List[Tuple[Optional[np.ndarray], Optional[dict], Optional[str]]]:
+    """
+    多人脸检测和对齐实现（支持InsightFace和dlib）
+    运行在子进程中。
+    返回: List[(aligned_face, bbox, tip), ...]
+    """
+    import time
+    t_start = time.time()
+
+    global _mp_detector, _mp_predictor, _use_insightface
+
+    if _mp_detector is None:
+        logger.error(f"[Worker PID: {os.getpid()}] 检测器未加载")
+        return []
+
+    results = []
+
+    if _use_insightface:
+        # ========== InsightFace路径（GPU加速，多人脸） ==========
+        t1 = time.time()
+        try:
+            # InsightFace检测（一步完成检测+对齐）
+            faces = _mp_detector.get(image)
+
+            logger.info(f"[性能] InsightFace检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
+
+            if not faces:
+                logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
+                return []
+
+            # 获取置信度阈值
+            det_thresh = settings.face_detection.insightface.det_thresh
+
+            # 过滤低置信度人脸并处理所有人脸
+            for i, face in enumerate(faces):
+                # 检查是否有置信度属性
+                confidence = getattr(face, 'det_score', 1.0)  # 如果没有det_score属性，默认为1.0
+
+                if confidence < det_thresh:
+                    logger.debug(f"[InsightFace] 人脸{i+1}置信度{confidence:.3f}低于阈值{det_thresh}，跳过")
+                    continue
+
+                # 提取边界框 [x1, y1, x2, y2]
+                bbox_coords = face.bbox.astype(int)
+                x, y, x2, y2 = bbox_coords[0], bbox_coords[1], bbox_coords[2], bbox_coords[3]
+                w = x2 - x
+                h = y2 - y
+
+                tip = "人脸特征像素正常，可以使用"
+                if w < 200 or h < 200:
+                    tip = "人脸特征像素过低，或影响检测效果"
+
+                logger.info(f"[InsightFace] 人脸{i+1}像素大小: {w}x{h}, 置信度: {confidence:.3f}")
+
+                # InsightFace获取对齐后的人脸（112x112）
+                try:
+                    # 方法1: 尝试使用face.get_norm_crop_img（如果存在）
+                    if hasattr(face, 'get_norm_crop_img') and callable(face.get_norm_crop_img):
+                        aligned = face.get_norm_crop_img(image)
+                    # 方法2: 使用insightface.utils.face_align.norm_crop
+                    else:
+                        # 在子进程中导入 insightface（已经在 _init_dlib_worker 中导入过）
+                        import insightface
+                        if hasattr(insightface, 'utils') and hasattr(insightface.utils, 'face_align'):
+                            from insightface.utils import face_align
+                            aligned = face_align.norm_crop(image, landmark=face.kps)
+                        else:
+                            # 方法3: 使用cv2进行对齐（基于5个关键点）
+                            landmark = face.kps.astype(np.float32)
+                            dst_points = np.array([
+                                [38.2946, 51.6963],  # 左眼中心
+                                [73.5318, 51.5014],  # 右眼中心
+                                [56.0252, 71.7366],  # 鼻尖
+                                [41.5493, 92.3655],  # 左嘴角
+                                [70.7299, 92.2041]   # 右嘴角
+                            ], dtype=np.float32)
+                            transform_matrix = cv2.getAffineTransform(landmark[:3], dst_points[:3])
+                            aligned = cv2.warpAffine(image, transform_matrix, (112, 112), borderValue=0)
+                except Exception as align_error:
+                    logger.error(f"[Worker PID: {os.getpid()}] 人脸{i+1}对齐失败: {align_error}", exc_info=True)
+                    continue
+
+                if not aligned.flags['C_CONTIGUOUS']:
+                    aligned = np.ascontiguousarray(aligned)
+
+                bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
+                results.append((aligned, bbox, tip))
+
+            logger.info(f"[性能] InsightFace多人脸处理完成，有效人脸: {len(results)}")
+            return results
+
+        except Exception as e:
+            logger.error(f"[Worker PID: {os.getpid()}] InsightFace多人脸检测失败: {e}", exc_info=True)
+            return []
+
+    else:
+        # ========== Dlib路径（原有逻辑，支持多人脸） ==========
+        if _mp_predictor is None:
+            logger.error(f"[Worker PID: {os.getpid()}] Dlib 模型未加载，请检查是否子进程初始化失败")
+            return []
+
+        # 转灰度cpu计算
+        t0 = time.time()
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        logger.info(f"[性能] 灰度转换耗时: {(time.time()-t0)*1000:.2f}ms")
+
+        # 1. 检测人脸cpu计算（upsample=0 避免无人脸时过多上采样导致响应缓慢）
+        t1 = time.time()
+        faces = _mp_detector(gray, 1)
+        logger.info(f"[性能] dlib人脸检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
+
+        if not faces:
+            logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
+            return []
+
+        # 处理所有人脸
+        for i, face in enumerate(faces):
+            (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
+
+            tip = "人脸特征像素正常，可以使用"
+            if w < 200 or h < 200:
+                tip = "人脸特征像素过低，或影响检测效果"
+
+            logger.info(f"[dlib] 人脸{i+1}像素大小: {w}x{h}")
+
+            # 2. 关键点
+            shape = _mp_predictor(gray, face)
+
+            # _shape_to_np, _five_from_68, _align_by_5pts 应为纯函数
+            lm68 = _shape_to_np(shape)
+            lm5 = _five_from_68(lm68)
+            aligned = _align_by_5pts(image, lm5, (112, 112))
+
+            if not aligned.flags['C_CONTIGUOUS']:
+                aligned = np.ascontiguousarray(aligned)
+
+            bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
+            results.append((aligned, bbox, tip))
+
+        logger.info(f"[性能] dlib多人脸处理完成，有效人脸: {len(results)}")
+        return results
+
+
 def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
     """
     人脸检测和对齐实现（支持InsightFace和dlib）
@@ -304,6 +447,29 @@ async def detect_and_extract_face(image: np.ndarray):
     except Exception as e:
         print(f"Process Pool Error: {e}")
         return None, None, None
+
+
+async def detect_and_extract_all_faces(image: np.ndarray):
+    """
+    多人脸检测和提取的主程序调用入口。
+    返回: List[(aligned_face, bbox, tip), ...]
+    """
+    loop = asyncio.get_running_loop()
+
+    if GLOBAL_PROCESS_POOL is None:
+        # 如果池子没初始化（比如直接运行此脚本测试），降级为同步或报错
+        raise RuntimeError("全局进程池未初始化，请检查main.py是否正确启动")
+
+    try:
+        # 提交给进程池
+        return await loop.run_in_executor(
+            GLOBAL_PROCESS_POOL,
+            _dlib_multi_face_task_implementation,
+            image
+        )
+    except Exception as e:
+        logger.error(f"Multi-Face Process Pool Error: {e}")
+        return []
 
 
 # ArcFace 常用 5点模板（112x112）
