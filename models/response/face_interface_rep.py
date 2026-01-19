@@ -9,6 +9,7 @@ class BBox(BaseModel):
     h: int
 
 class MatchItem(BaseModel):
+    bbox: Optional[BBox] = None  # 新增：对应的人脸边界框
     id: str
     name: Optional[str] = None
     number: Optional[str] = None

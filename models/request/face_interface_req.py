@@ -5,12 +5,15 @@ from typing import Optional, List
 """
 用于存放/recognize接口的请求模型
 """
+class Point(BaseModel):
+    x: int
+    y: int
 
 class PersonRecognizeRequest(BaseModel):
     # 人脸recognize请求模型
     photo: str
-    # targets: Optional[list[PersonBase]] = None
-    targets: Optional[list[str]] = None
+    points: List[dict[Point]] = None # 可传递划区域多点，只识别区域内的人脸
+    targets: Optional[List[str]] = None
     threshold: Optional[float] = None
 
 class BatchRecognizeRequest(BaseModel):
