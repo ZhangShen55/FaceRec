@@ -43,6 +43,7 @@ class InsightFaceSettings(BaseModel):
     device: str = "gpu"  # 使用设备: "gpu" 或 "cpu"
     gpu_id: int = 0  # GPU设备ID（仅在 device = "gpu" 时生效）
     det_size: int = 640  # 检测尺寸
+    det_thresh: float = 0.5  # 人脸检测置信度阈值 (0-1, 低于此值的人脸将被过滤)
 
 class FaceDetectionSettings(BaseModel):
     """人脸检测器配置"""
