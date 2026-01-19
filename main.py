@@ -40,6 +40,47 @@ logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 MAX_WORKERS = settings.thread.max_workers
 
+# ============ 模型预加载函数 ============
+async def _preload_ai_models():
+    """
+    启动时预加载 AI 模型到 GPU，避免首次请求时的延迟加载
+    包括：
+    1. InsightFace 检测模型（在子进程中加载）
+    2. Embedding 模型（ArcFace，在主进程中加载）
+    """
+    import asyncio
+
+    detector_choice = settings.face_detection.detector.lower()
+
+    if detector_choice == "insightface":
+        logger.info("🔄 预加载 InsightFace 检测模型...")
+        try:
+            # 在线程池中运行 InsightFace 初始化，以避免阻塞主线程
+            # InsightFace 会在 _init_dlib_worker 初始化时加载
+            # 这里通过向进程池提交一个空任务来触发初始化
+            def _dummy_insightface_warmup():
+                # 这个函数会在已初始化的子进程中运行
+                # 子进程的 _init_dlib_worker 会在创建时就加载 InsightFace
+                return "InsightFace 已预加载"
+
+            # 使用 loop 的 run_in_executor 来异步调用
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                ai_engine.GLOBAL_PROCESS_POOL,
+                _dummy_insightface_warmup
+            )
+            logger.info(f"✅ {result}")
+        except Exception as e:
+            logger.warning(f"⚠️  InsightFace 预加载失败: {e}")
+
+    logger.info("🔄 预加载 Embedding 模型 (ArcFace)...")
+    try:
+        # 在主进程中同步加载 Embedding 模型
+        embedding_model = ai_engine._get_embedding_model()
+        logger.info(f"✅ Embedding 模型已预加载到 GPU")
+    except Exception as e:
+        logger.warning(f"⚠️  Embedding 模型预加载失败: {e}")
+
 # ---------------- 生命周期管理 (核心) ----------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -71,29 +112,38 @@ async def lifespan(app: FastAPI):
     # 4. Dlib 进程池初始化 (注入到 ai_engine)
     # 确保 max_workers 设置合理 (建议 1 或 2，防止内存爆炸)
     # 当前 settings.thread.max_workers 建议设置为 2
-    logger.info(f"Initializing Dlib Process Pool with {MAX_WORKERS} workers...")
+    logger.info(f"正在初始化 Dlib 进程池，工作线程数: {MAX_WORKERS}...")
     pool = ProcessPoolExecutor(
         max_workers=MAX_WORKERS,
         initializer=ai_engine._init_dlib_worker
     )
     ai_engine.GLOBAL_PROCESS_POOL = pool
+    logger.info("✅ Dlib 进程池初始化完成")
+
+    # 5. 预加载 InsightFace 和 Embedding 模型到 GPU
+    logger.info("🔄 预加载 AI 模型到 GPU...")
+    try:
+        await _preload_ai_models()
+        logger.info("✅ AI 模型预加载完成")
+    except Exception as e:
+        logger.warning(f"⚠️  AI 模型预加载失败: {e}，系统将在首次请求时延迟加载")
 
     yield  # 应用运行中...
 
     # ================= 关闭 (Shutdown) =================
     logger.info("系统关闭: 释放资源...")
 
-    # 5. 关闭 Redis 连接
+    # 6. 关闭 Redis 连接
     try:
         await RedisClient.close()
         logger.info("✅ Redis 连接已关闭")
     except Exception as e:
         logger.error(f"❌ Redis 关闭失败: {e}")
 
-    # 6. 资源清理
+    # 7. 资源清理
     pool.shutdown(wait=True)
     ai_engine.GLOBAL_PROCESS_POOL = None
-    logger.info("Dlib 进程池关闭成功.")
+    logger.info("✅ Dlib 进程池关闭成功")
 
 
 # ---------------- App 初始化 ----------------
