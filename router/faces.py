@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException
 from app.services import person
 from app.services.cache_service import cache_service
-from app.utils.image_loader import base64_to_mat
+from app.utils.image_loader import base64_to_mat, apply_polygon_roi
 from app.core import ai_engine
 from app.core.config import settings
 from app.core.database import db
@@ -32,6 +32,7 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
     # 1. 确定阈值
     threshold = request.threshold if request.threshold else THRESHOLD
     targets = request.targets if request.targets else []
+    points = request.points if request.points else []
 
     # 2. 解析图片数据
     t_step = time.time()
@@ -60,19 +61,37 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             message="未接收到有效图片数据或图像数据存在异常"
         )
 
-    # 3. 检测人脸
+    # 2.5 应用 ROI 掩码（如果提供了 points）
+    has_roi = False
+    if points and len(points) >= 3:
+        t_step = time.time()
+        try:
+            image_data, has_roi = apply_polygon_roi(image_data, points)
+            logger.info(f"[recognize] [性能] 应用 ROI 掩码耗时: {(time.time()-t_step)*1000:.2f}ms")
+            if has_roi:
+                logger.info(f"[recognize] ROI 掩码已应用，点数: {len(points)}")
+        except Exception as e:
+            logger.error(f"[recognize] 应用 ROI 掩码失败: {e}")
+            return ApiResponse.error(
+                status_code=StatusCode.BAD_REQUEST,
+                message=f"应用 ROI 掩码失败: {str(e)}"
+            )
+    elif points:
+        logger.warning(f"[recognize] 提供的 points 不足 3 个 ({len(points)}), 将识别整个图像")
+
+    # 3. 多人脸检测
     t_step = time.time()
     try:
-        face_image, bbox, _ = await ai_engine.detect_and_extract_face(image_data)
+        face_results = await ai_engine.detect_and_extract_all_faces(image_data)
     except Exception as e:
         logger.error(f"[recognize] 人脸检测服务内部错误: {e}")
         return ApiResponse.error(
             status_code=StatusCode.FACE_DETECTION_ERROR,
             message=f"人脸检测服务内部错误: {str(e)}"
         )
-    logger.info(f"[性能] 人脸检测总耗时(含进程通信): {(time.time()-t_step)*1000:.2f}ms")
+    logger.info(f"[性能] 多人脸检测总耗时(含进程通信): {(time.time()-t_step)*1000:.2f}ms")
 
-    if face_image is None:
+    if not face_results:
         logger.info(f"[recognize] 未检测到有效人脸")
         logger.info(f"[recognize] [性能] 总请求耗时: {(time.time()-t_total_start)*1000:.2f}ms")
         return ApiResponse.error(
@@ -80,35 +99,40 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             message="图像中未检测到人脸，请重新捕捉人脸"
         )
 
-    # 4. 验证人脸尺寸
-    if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
-        logger.info(f"[recognize] 检测到的人脸过小: {face_image.shape[0]}x{face_image.shape[1]}px，小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px")
+    logger.info(f"[recognize] 检测到 {len(face_results)} 张人脸")
+
+    # 4. 过滤过小的人脸
+    valid_faces = []
+    for i, (face_image, bbox, tip) in enumerate(face_results):
+        if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
+            logger.debug(f"[recognize] 人脸{i+1}过小: {face_image.shape[0]}x{face_image.shape[1]}px，跳过")
+            continue
+        valid_faces.append((face_image, bbox, tip))
+
+    if not valid_faces:
+        logger.info(f"[recognize] 所有检测到的人脸都过小，无法识别")
         return ApiResponse.error(
             status_code=StatusCode.FACE_TOO_SMALL,
-            message=f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别",
-            data={
-                "hasFace": True,
-                "bbox": BBox(**bbox).model_dump() if bbox else None,
-                "threshold": threshold,
-                "match": None,
-                "message": f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别"
-            }
+            message="检测到的人脸像素过小，无法识别"
         )
 
-    # 5. 预加载数据库数据（只有检测到人脸后才查询数据库，避免浪费）
-    # logger.info("[recognize] 预加载数据库数据...")
+    logger.info(f"[recognize] 有效人脸数量: {len(valid_faces)}")
+
+    # 5. 预加载数据库数据
     all_docs = await cache_service.get_all_embeddings()
 
     if not all_docs:
         logger.info("[recognize] 数据库中没有有效人脸特征")
+        # 构建所有检测到的人脸的 bbox 列表
+        bboxs = [bbox for _, bbox, _ in valid_faces]
         return ApiResponse.error(
             status_code=StatusCode.DB_EMPTY,
             message="数据库为空，请先录入人员信息",
             data={
                 "hasFace": True,
-                "bbox": BBox(**bbox).model_dump() if bbox else None,
                 "threshold": threshold,
-                "match": None,
+                "bboxs": bboxs,
+                "match": [],
                 "message": "数据库为空，请先录入人员信息"
             }
         )
@@ -118,73 +142,80 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
         target_docs = await person.get_targets_embeddings(db, targets)
         logger.info(f"[recognize] targets 查询到 {len(target_docs)} 个候选人")
 
-    # 6. 提取特征
-    try:
-        emb_q = await ai_engine.get_embedding(face_image)
-    except Exception as e:
-        logger.error(f"[recognize] 人脸特征提取失败: {e}")
-        return ApiResponse.error(
-            status_code=StatusCode.FEATURE_EXTRACT_ERROR,
-            message=f"人脸特征提取失败: {str(e)}"
+    # 6. 对每个人脸进行识别
+    all_face_matches = []  # 存储所有人脸的匹配结果: [(similarity, doc, bbox, is_target), ...]
+
+    for i, (face_image, bbox, tip) in enumerate(valid_faces):
+        logger.info(f"[recognize] 处理人脸 {i+1}/{len(valid_faces)}")
+
+        # 提取特征
+        try:
+            emb_q = await ai_engine.get_embedding(face_image)
+        except Exception as e:
+            logger.error(f"[recognize] 人脸{i+1}特征提取失败: {e}")
+            continue
+
+        # 双阶段匹配
+        face_matches = []
+
+        # 阶段1: targets 优先匹配（如果有targets）
+        if target_docs:
+            target_threshold = CANDIDATE_THRESHOLD  # 使用候选阈值
+            target_results = ai_engine.find_top_matches(
+                emb_q, target_docs, top_k=3, min_threshold=target_threshold
+            )
+            for sim, doc in target_results:
+                face_matches.append((sim, doc, bbox, True))  # is_target=True
+            logger.debug(f"[recognize] 人脸{i+1} targets匹配: {len(target_results)}个")
+
+        # 阶段2: 全局匹配
+        global_results = ai_engine.find_top_matches(
+            emb_q, all_docs, top_k=3, min_threshold=threshold
         )
+        for sim, doc in global_results:
+            face_matches.append((sim, doc, bbox, False))  # is_target=False
+        logger.debug(f"[recognize] 人脸{i+1} 全局匹配: {len(global_results)}个")
 
-    # 7. 全局比对：找 similarity >= threshold 的前 3 人
-    logger.info("[recognize] 开始全局比对...")
+        # 将该人脸的匹配结果加入总列表
+        all_face_matches.extend(face_matches)
 
-    # 使用新函数找 top3 且 >= threshold 的人
-    result_A = ai_engine.find_top_matches(emb_q, all_docs, top_k=3, min_threshold=threshold)
-    logger.info(f"[recognize] 全局比对找到 {len(result_A)} 个 >= 阈值 {threshold} 的匹配")
-
-    # 8. 如果有 targets，进行 targets 比对
-    result_B = []
-    if target_docs:
-        # targets 使用宽松阈值 threshold/2
-        target_threshold = threshold / 2
-        result_B = ai_engine.find_top_matches(
-            emb_q, target_docs, top_k=len(target_docs), min_threshold=target_threshold
-        )
-        logger.info(f"[recognize] targets 比对找到 {len(result_B)} 个 >= 阈值 {target_threshold} 的匹配")
-
-    # 9. 合并去重：按 number 去重，优先保留 is_target=True 的
-    match_dict = {}  # key: number, value: (similarity, doc, is_target)
-
-    # 先添加 result_A（is_target=False）
-    for sim, doc in result_A:
-        number = doc.get("number")
-        if number:
-            match_dict[number] = (sim, doc, False)
-
-    # 再添加 result_B（is_target=True），会覆盖 result_A 中相同 number 的项
-    for sim, doc in result_B:
-        number = doc.get("number")
-        if number:
-            match_dict[number] = (sim, doc, True)
-
-    # 10. 按相似度降序排序
-    final_matches = sorted(match_dict.values(), key=lambda x: x[0], reverse=True)
-
-    # 11. 构建响应
-    if not final_matches:
-        logger.info("[recognize] 未找到任何匹配")
+    # 7. 全局去重和排序
+    if not all_face_matches:
+        logger.info("[recognize] 所有人脸都未找到匹配")
+        # 构建所有检测到的人脸的 bbox 列表
+        bboxs = [bbox for _, bbox, _ in valid_faces]
         return ApiResponse.error(
             status_code=StatusCode.NO_MATCH_FOUND,
             message="未找到匹配的人物（相似度低于阈值）",
             data={
                 "hasFace": True,
-                "bbox": BBox(**bbox).model_dump() if bbox else None,
                 "threshold": threshold,
-                "match": None,
+                "bboxs": bboxs,
+                "match": [],
                 "message": "未找到匹配的人物（相似度低于阈值）"
             }
         )
 
-    # 12. 构建 match 列表
-    match_items = []
-    global_count = len(result_A)
-    target_count = len(result_B)
+    # 按相似度降序排序
+    all_face_matches.sort(key=lambda x: x[0], reverse=True)
 
-    for sim, doc, is_target in final_matches:
+    # 去重：相同number的人物只保留相似度最高的
+    seen_numbers = set()
+    final_matches = []
+
+    for sim, doc, bbox, is_target in all_face_matches:
+        number = doc.get("number")
+        if number and number not in seen_numbers:
+            seen_numbers.add(number)
+            final_matches.append((sim, doc, bbox, is_target))
+            if len(final_matches) >= 3:  # 只取前3名
+                break
+
+    # 8. 构建响应
+    match_items = []
+    for sim, doc, bbox, is_target in final_matches:
         match_items.append(MatchItem(
+            bbox=BBox(**bbox),
             id=str(doc["_id"]),
             name=doc.get("name"),
             number=doc.get("number"),
@@ -192,27 +223,23 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             is_target=is_target
         ))
 
-    # 13. 构建消息
+    # 9. 构建消息
     best_match = final_matches[0]
     best_name = best_match[1].get("name")
     best_number = best_match[1].get("number")
 
-    if targets:
-        message = f"匹配成功，≥阈值{threshold*100:.2f}%有{global_count}位，targets命中{target_count}位，最相似的是{best_name}_{best_number}"
-    else:
-        message = f"匹配成功，≥阈值{threshold*100:.2f}%有{len(final_matches)}位，最相似的是{best_name}_{best_number}"
+    message = f"匹配成功，≥阈值{threshold*100:.2f}%有{len(final_matches)}位，最相似的是{best_name}_{best_number}"
 
-    logger.info(f"[recognize] {message}")
+    logger.info(f"[recognize] [性能] 总请求耗时: {(time.time()-t_total_start)*1000:.2f}ms")
 
     return ApiResponse.success(
+        message="识别成功",
         data={
             "hasFace": True,
-            "bbox": BBox(**bbox).model_dump() if bbox else None,
             "threshold": threshold,
-            "match": [m.model_dump() for m in match_items],
+            "match": [item.model_dump() for item in match_items],
             "message": message
-        },
-        message="识别成功"
+        }
     )
 
 

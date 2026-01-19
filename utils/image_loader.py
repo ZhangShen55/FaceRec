@@ -2,7 +2,7 @@
 # from __future__ import annotations
 import base64, re, httpx, cv2, numpy as np
 from fastapi import Form, UploadFile, HTTPException, Depends
-from typing import Union, Tuple
+from typing import Union, Tuple, List, Optional
 from app.core.config import settings
 from app.core.exceptions import ImageValidationError
 from app.core.logger import get_logger
@@ -170,3 +170,59 @@ def _validate_image_pixels(mat: np.ndarray):
         raise ImageValidationError(
             400,f"图片整体分辨率过高 ({w}x{h}={total_pixels}px)，不能高于 921600px"
         )
+
+
+def apply_polygon_roi(image: np.ndarray, points: List) -> Tuple[np.ndarray, bool]:
+    """
+    应用多边形 ROI (Region of Interest) 到图像上。
+    将 ROI 区域内的像素保留，外部设为黑色。
+
+    参数:
+        image: 原始图像 (H, W, 3) uint8
+        points: Point 对象列表，每个 Point 有 x, y 属性
+                至少需要 3 个点才能构成有效的多边形
+
+    返回:
+        Tuple[roi_image, has_valid_roi]:
+        - roi_image: 应用 ROI 后的图像（外部黑色），或原图（无效 ROI）
+        - has_valid_roi: 是否成功应用了 ROI
+
+    说明:
+        - 如果 points 为空或点数 <= 2，返回原图和 False（无有效 ROI）
+        - 点的顺序应为顺时针：左上→右上→右下→左下→...
+        - 坐标自动裁剪到图像边界内
+    """
+    # 如果 points 为空或点数不足 3 个，返回原图
+    if not points or len(points) < 3:
+        logger.debug(f"[apply_polygon_roi] ROI 点数不足 ({len(points) if points else 0}), 返回原图")
+        return image, False
+
+    h, w = image.shape[:2]
+
+    # 创建黑色掩码（与原图同尺寸）
+    mask = np.zeros((h, w), dtype=np.uint8)
+
+    # 将 Point 对象转换为 numpy 数组 [(x, y), (x, y), ...]
+    try:
+        pts = np.array([(p.x, p.y) for p in points], dtype=np.int32)
+    except AttributeError as e:
+        logger.error(f"[apply_polygon_roi] Point 对象格式错误: {e}")
+        return image, False
+
+    # 坐标裁剪到图像边界 [0, w-1] x [0, h-1]
+    pts = np.clip(pts, [0, 0], [w - 1, h - 1])
+
+    logger.debug(f"[apply_polygon_roi] 原始点: {points}, 裁剪后的点: {pts.tolist()}, 图像尺寸: {w}x{h}")
+
+    # 绘制多边形，内部填充白色（255）
+    cv2.fillPoly(mask, [pts], 255)
+
+    # 应用掩码：ROI 内保留，外部黑色
+    # cv2.bitwise_and(src1, src2, mask) 的作用是对 src1 和 src2 按位与，然后用 mask 筛选
+    # 这里用法：保留 image 中 mask 为 255 的部分，其余为 0（黑色）
+    roi_image = cv2.bitwise_and(image, image, mask=mask)
+
+    logger.info(f"[apply_polygon_roi] 成功应用 ROI 掩码，点数: {len(points)}, 裁剪后点数: {len(pts)}")
+
+    return roi_image, True
+

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from app.models.schemas import PersonBase
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 """
 用于存放/recognize接口的请求模型
@@ -12,7 +12,7 @@ class Point(BaseModel):
 class PersonRecognizeRequest(BaseModel):
     # 人脸recognize请求模型
     photo: str
-    points: List[dict[Point]] = None # 可传递划区域多点，只识别区域内的人脸
+    points: Optional[List[Point]] = None 
     targets: Optional[List[str]] = None
     threshold: Optional[float] = None
 
