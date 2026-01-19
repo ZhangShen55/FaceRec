@@ -15,17 +15,18 @@ rec_min_face_hw = 50 # （识别阶段）最小人脸高度和宽度
 # 人脸检测器选择: "dlib" 或 "insightface"
 detector = "insightface"  # 可选: "dlib" 或 "insightface"
 # InsightFace 配置（仅在 detector = "insightface" 时生效）
+
+
 [face_detection.insightface]
-# 模型名称: "buffalo_l" (大模型，精度高) 或 "buffalo_s" (小模型，速度快)
-model_name = "buffalo_l"
-# 模型文件路径（可选，留空则使用默认路径 ~/.insightface/models/）
-model_path = "/root/workspace/FaceRecAPI_DEV/app/ai_models"  # 例如: "/path/to/models"
-# 使用设备: "gpu" 或 "cpu"
+model_name = "buffalo_l" # 模型名称: "buffalo_l" (大模型，精度高) 或 "buffalo_s" (小模型，速度快)
+model_path = "/root/workspace/FaceRecAPI_DEV/app/ai_models"  # 模型文件路径 例如: "/path/to/models"
 device = "gpu"  # 可选: "gpu" 或 "cpu"
-# GPU设备ID（仅在 device = "gpu" 时生效，0表示第一张GPU，1表示第二张，以此类推）
-gpu_id = 1
-# 检测尺寸（越大精度越高但速度越慢）
-det_size = 640  # 可选: 320, 640, 1280
+gpu_id = 1 # GPU设备ID（仅在 device = "gpu" 时生效，0表示第一张GPU，1表示第二张，以此类推）
+det_size = 320  # 检测尺寸（越大精度越高但速度越慢）可选: 320, 640, 1280
+det_thresh = 0.75 # 人脸检测阈值
+
+
+
 [gpu]
 gpu_id = 1  # GPU Embedding GPU ID
 [threading]
