@@ -25,6 +25,7 @@ media/detections/
 
 # AI Models
 ai_models/*.onnx
+ai_models/*/*.onnx
 ai_models/*.dat
 
 # Temporary files
