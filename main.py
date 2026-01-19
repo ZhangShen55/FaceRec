@@ -28,7 +28,7 @@ if hasattr(settings, 'face_detection') and settings.face_detection.detector.lowe
 from app.core.database import db
 from app.core import ai_engine
 from app.core.logger import get_logger
-from app.router import faces, persons, web, ops, faces_new
+from app.router import faces, persons, web, ops
 from app.core.logger import request_id_ctx, new_request_id
 from app.middleware import APIStatsMiddleware
 from app.models.api_response import StatusCode, ApiResponse
@@ -167,7 +167,6 @@ app.mount("/media", StaticFiles(directory=BASE_DIR / "media"), name="media")
 app.include_router(ops.router)
 app.include_router(faces.router)
 app.include_router(persons.router)
-app.include_router(faces_new.router)
 app.include_router(web.router)
 
 # ---------------- 调试入口 ----------------
