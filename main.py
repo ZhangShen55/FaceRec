@@ -225,16 +225,19 @@ if __name__ == "__main__":
 
     # 开发环境调试用
     uvicorn.run(app, host="0.0.0.0", port=8003, reload=False)
-    # PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 4 --env-file .env
-
+    # PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 4
+    # --env-file .env 读取 .env 文件中的环境变量(该项目中为使用)
 
     # cd app
-    # PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003  --env-file .env --workers 1
+    # PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003   --workers 1
+    
+    # ============ 端口检查 ============
+    # sudo ss -lntp | grep ':8090' 
 
     # ============ 后台启动命令 ============
     # conda activate facerecapi
     # cd /root/workspace/FaceRecAPI_DEV/app
-    # nohup env PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003 --env-file .env --workers 1 > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.log 2>&1 & echo $! > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid
+    # nohup env PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003  --workers 1 > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.log 2>&1 & echo $! > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid
 
     # ============ 查看运行状态 ============
     # ps aux | grep "facerec_server_uvicorn app.main:app"
