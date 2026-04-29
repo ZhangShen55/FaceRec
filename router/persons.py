@@ -1,17 +1,11 @@
 import uuid
 import cv2
 import numpy as np
-from typing import List
 from pathlib import Path
 from bson.binary import Binary
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
-from fastapi.exceptions import RequestValidationError
-from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import ValidationError
+from fastapi import APIRouter, HTTPException, Query, Body
 
 from app.core.database import db
-from app.core.database import get_session
-from app.core.exceptions import DatabaseError
 from app.core.config import settings
 from app.services import person as person_crud
 from app.services.cache_service import cache_service
@@ -20,7 +14,7 @@ from app.utils.utils_mongo import doc_to_person_read
 from app.core.logger import get_logger
 from app.core import ai_engine
 from app.models.request.person_interface_req import *
-from app.models.response.person_interface_rep import PersonFeatureResponse, PersonRead, PersonsFeatureResponse, SearchPersonResponse
+from app.models.response.person_interface_rep import PersonFeatureResponse, PersonRead
 from app.models.api_response import StatusCode, ApiResponse
 
 
