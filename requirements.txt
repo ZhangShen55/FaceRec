@@ -1,31 +1,32 @@
-# Web框架和服务器
-fastapi
-uvicorn[standard]
-gunicorn
-python-multipart
-jinja2
-httpx
-tomli
+# =============================================================================
+# FaceRecAPI 运行时依赖（与 conda 环境 facerecapi 实测版本一致，全部锁定）
+# Python: 3.10.x
+# CUDA Toolkit: 11.8 (容器内) / 11.6 (宿主机) — 由 NVIDIA 驱动向后兼容
+# 严禁随意升级 onnxruntime-gpu / fastdeploy-gpu-python / numpy（CUDA 11.x 强绑定）
+# =============================================================================
 
-# 数据库ORM
-sqlmodel
-# MongoDB驱动
-motor
-pymongo
-# Redis 异步驱动
-redis[hiredis]>=5.0.0
-# 深度学习与图像处理
-numpy==1.26.4  # onnxruntime-gpu 1.16.3需要numpy 1.x
-opencv-python
-dlib
+# ---------- Web 框架 ----------
+fastapi==0.116.1
+uvicorn[standard]==0.16.0
+gunicorn==23.0.0
+python-multipart==0.0.20
+jinja2==3.1.6
+httpx==0.28.1
+tomli==2.3.0
+pydantic>=2.11,<3
+
+# ---------- 数据库 / 缓存 ----------
+motor==3.7.1
+pymongo==4.15.1
+redis>=5.0.0,<8                  # 不启用 hiredis 扩展（未使用）
+
+# ---------- 深度学习 / 推理（CUDA 11.x 绑定，谨慎升级）----------
+numpy==1.26.4                    # onnxruntime-gpu 1.16.3 要求 numpy 1.x
+opencv-python-headless==4.12.0.88   # 服务器无 GUI，使用 headless 版本
+dlib==20.0.0
 insightface==0.7.3
-onnxruntime-gpu==1.16.3  # 兼容CUDA 11.6（系统安装的CUDA版本）
-#onnxruntime==1.23.2 # cpu版本
-
-# GPU版FastDeploy（如要CPU版可改成 fastdeploy-python==1.0.7）
+onnxruntime-gpu==1.16.3
 fastdeploy-gpu-python==1.0.7
-# -f https://www.paddlepaddle.org.cn/whl/fastdeploy.html
 
-# 统计
-psutil
-
+# ---------- 系统监控 ----------
+psutil==7.2.1
