@@ -14,9 +14,8 @@ rec_min_face_hw = 50 # （识别阶段）最小人脸高度和宽度
 [face_detection]
 # 人脸检测器选择: "dlib" 或 "insightface"
 detector = "insightface"  # 可选: "dlib" 或 "insightface"
+
 # InsightFace 配置（仅在 detector = "insightface" 时生效）
-
-
 [face_detection.insightface]
 model_name = "buffalo_l" # 模型名称: "buffalo_l" (大模型，精度高) 或 "buffalo_s" (小模型，速度快)
 model_path = "/root/workspace/FaceRecAPI_DEV/app/ai_models"  # 模型文件路径 例如: "/path/to/models"
@@ -42,6 +41,12 @@ min_feature_image_height_px = 80    # 最小特征图片高度
 max_feature_image_size_m = 10 # 最大特征图片大小（MB）
 max_face_hw = 999  # （提取特征阶段）最大人脸高度和宽度
 min_face_hw = 50  # 最小人脸高度和宽度
+
+[media]
+# 是否将录入接口（/persons、/persons/batch）的人脸裁剪图持久化到 media/person_photos/
+# - true:  写入磁盘，photo_path 写入 MongoDB（Web UI 头像展示需要开启）
+# - false: 不落盘，photo_path 写空字符串（纯后端 API 服务推荐，避免存储泄漏）
+is_persistence = false
 [logger]
 level = "INFO"  # 日志级别
 log_path = "./app/logs/facere_service.log"  # 日志文件路径

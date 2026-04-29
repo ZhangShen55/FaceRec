@@ -24,6 +24,8 @@ router = APIRouter(prefix="/persons", tags=["Persons Management"])
 BASE_DIR = Path(__file__).resolve().parent.parent
 MIN_FEATURE_IMAGE_HEIGHT_PX = int(settings.feature_image.min_feature_image_height_px)
 MIN_FEATURE_IMAGE_WIDTH_PX = int(settings.feature_image.min_feature_image_width_px)
+IS_PERSISTENCE = bool(settings.media.is_persistence)
+logger.info(f"[/persons] 人脸图持久化开关 is_persistence={IS_PERSISTENCE}")
 
 @router.post("", response_model=ApiResponse)
 async def create_person_api(
@@ -88,22 +90,25 @@ async def create_person_api(
                 message=f"人脸特征提取失败: {str(e)}"
             )
 
-        # 4. 保存裁剪后的人脸图片
+        # 4. 保存裁剪后的人脸图片（受 media.is_persistence 开关控制）
         photo_path = ""  # 默认为空
-        try:
-            media_dir = BASE_DIR / "media" / "person_photos"
-            media_dir.mkdir(parents=True, exist_ok=True)
+        save_failed = False
+        if IS_PERSISTENCE:
+            try:
+                media_dir = BASE_DIR / "media" / "person_photos"
+                media_dir.mkdir(parents=True, exist_ok=True)
 
-            # 文件名
-            filename = f"{request.name}_{request.number}_{uuid.uuid4().hex[:8]}.jpg"
-            save_path = media_dir / filename
-            cv2.imwrite(str(save_path), face_image)
-            photo_path = f"/media/person_photos/{filename}"
-        except Exception as e:
-            logger.error(f"[/persons] 保存图片失败: {e}")
-            # 文件保存失败，但人脸检测和特征提取已成功，继续保存到数据库
-            logger.warning(f"[/persons] 图片保存失败，但继续保存特征数据到数据库")
-            photo_path = ""  # 图片路径为空
+                filename = f"{request.name}_{request.number}_{uuid.uuid4().hex[:8]}.jpg"
+                save_path = media_dir / filename
+                cv2.imwrite(str(save_path), face_image)
+                photo_path = f"/media/person_photos/{filename}"
+            except Exception as e:
+                logger.error(f"[/persons] 保存图片失败: {e}")
+                logger.warning(f"[/persons] 图片保存失败，但继续保存特征数据到数据库")
+                photo_path = ""
+                save_failed = True
+        else:
+            logger.debug("[/persons] is_persistence=false，跳过头像持久化")
 
         # 5. 保存到数据库
         bbox_str = f"{bbox['x']},{bbox['y']},{bbox['w']},{bbox['h']}" if bbox else ""
@@ -134,8 +139,8 @@ async def create_person_api(
                 message=f"数据库操作失败: {str(e)}"
             )
 
-        # 如果图片保存失败，返回 503 状态码但包含数据
-        if not photo_path:
+        # 仅当"开启了持久化但写盘失败"时返回 503；关闭持久化时 photo_path 本就为空,属于正常情况
+        if save_failed:
             return ApiResponse.error(
                 status_code=StatusCode.FILE_SAVE_ERROR,
                 message=f"人物特征{action}成功，但图片保存失败",
@@ -312,19 +317,27 @@ async def create_persons_batch_api(
                 ))
                 continue
 
-            media_dir = BASE_DIR / "media" / "person_photos"
-            media_dir.mkdir(parents=True, exist_ok=True)
+            # 4. 保存裁剪后的人脸图片（受 media.is_persistence 开关控制）
+            photo_path = ""
+            if IS_PERSISTENCE:
+                try:
+                    media_dir = BASE_DIR / "media" / "person_photos"
+                    media_dir.mkdir(parents=True, exist_ok=True)
 
-            filename = f"{person_req.name}_{person_req.number}_{uuid.uuid4().hex[:8]}.jpg"
-            save_path = media_dir / filename
-            cv2.imwrite(str(save_path), face_image)
+                    filename = f"{person_req.name}_{person_req.number}_{uuid.uuid4().hex[:8]}.jpg"
+                    save_path = media_dir / filename
+                    cv2.imwrite(str(save_path), face_image)
+                    photo_path = f"/media/person_photos/{filename}"
+                except Exception as e:
+                    logger.error(f"[/persons/batch] 第{idx+1}个人物保存图片失败: {e}")
+                    photo_path = ""
 
             bbox_str = f"{bbox['x']},{bbox['y']},{bbox['w']},{bbox['h']}" if bbox else ""
 
             person_dict = {
                 "name": person_req.name,
                 "number": person_req.number,
-                "photo_path": f"/media/person_photos/{filename}",
+                "photo_path": photo_path,
                 "bbox": bbox_str,
                 "embedding": Binary(emb_q.tobytes()),
                 "tip": tip if tip else ""

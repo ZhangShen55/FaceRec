@@ -28,6 +28,7 @@ if hasattr(settings, 'face_detection') and settings.face_detection.detector.lowe
 from app.core.database import db
 from app.core import ai_engine
 from app.core.logger import get_logger
+from app.core.db_init import init_database
 from app.router import faces, persons, web, ops
 from app.core.logger import request_id_ctx, new_request_id
 from app.middleware import APIStatsMiddleware
@@ -92,6 +93,9 @@ async def lifespan(app: FastAPI):
         logger.debug("MongoDB ping ok")
     except Exception as e:
         logger.exception("MongoDB ping failed: %s", e)
+
+    # 1.1 数据库结构初始化（幂等创建索引,不动业务数据）
+    await init_database(db)
 
     # 2. Redis 连接测试
     try:

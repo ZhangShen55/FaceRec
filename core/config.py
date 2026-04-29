@@ -67,6 +67,10 @@ class FeatureImageSettings(BaseModel):
     max_face_hw: int = 300
     min_face_hw: int = 40
 
+class MediaSettings(BaseModel):
+    """媒体存储配置"""
+    is_persistence: bool = False  # 默认不持久化人脸裁剪图（只进行后端 API 模式）
+
 class StatsSettings(BaseModel):
     retention_days: int = 7  # 详细日志保留天数
     hourly_retention_days: int = 30  # 按小时聚合数据保留天数
@@ -106,6 +110,7 @@ class Settings(BaseModel):
     gpu: GpuSettings
     frontlogin: FrontLoginSettings
     feature_image: FeatureImageSettings
+    media: MediaSettings = MediaSettings()  # 媒体持久化（可选，默认不持久化）
     logger: LoggerSettings
     stats: StatsSettings
     redis: RedisSettings
@@ -142,6 +147,7 @@ def load_config():
         gpu=GpuSettings(**config_data["gpu"]),
         frontlogin=FrontLoginSettings(**config_data["frontlogin"]),
         feature_image=FeatureImageSettings(**config_data["image"]),
+        media=MediaSettings(**config_data.get("media", {})),  # 缺省 -> 默认 is_persistence=False
         logger=LoggerSettings(**config_data["logger"]),
         stats=StatsSettings(**config_data.get("stats", {})),  # 兼容旧配置
         redis=RedisSettings(**redis_config) if redis_config else RedisSettings()  # 使用默认值

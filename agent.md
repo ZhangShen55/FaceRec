@@ -291,19 +291,30 @@ global_results = ai_engine.find_top_matches(
 - 子进程内部使用映射后的 `actual_gpu_id = 0`，避免在 GPU 0 上残留资源
 - `[gpu].gpu_id` 用于 ArcFace 模型，逻辑同上
 
-### 6. 启动预加载
+### 6. 启动预加载与幂等初始化
 
 `main.py::lifespan` 启动顺序：
 
-1. MongoDB ping
-2. Redis ping
-3. `cache_service.reload_all_embeddings()` 全量入 Redis（仅当 `redis.cache.refresh_on_startup=true`）
-4. 创建 dlib `ProcessPoolExecutor`（`max_workers = thread.max_workers`）+ initializer 触发模型加载
-5. **预热**：向进程池提交一个 dummy 任务触发子进程内 InsightFace 加载；主进程同步加载 ArcFace
-6. yield → 服务对外可用
-7. 关闭：Redis close + 进程池 shutdown
+1. **MongoDB ping**（仅探活，不写库）
+2. **数据库结构初始化** `init_database(db)`（来自 `app/core/db_init.py`）：
+   - 幂等创建 `persons.number` 唯一索引（`idx_number_unique`，防止并发录入产生重复）
+   - 幂等创建 `persons.name` 索引（`idx_name`，加速 `/persons/search` 模糊查询）
+   - 任一索引创建失败仅打 ERROR 日志，**不阻塞启动**
+   - 库内已有重复 `number` 时自动降级为普通索引并 WARNING（让运维清理）
+3. Redis ping
+4. `cache_service.reload_all_embeddings()` 全量入 Redis（仅当 `redis.cache.refresh_on_startup=true`）
+5. 创建 dlib `ProcessPoolExecutor`（`max_workers = thread.max_workers`）+ initializer 触发模型加载
+6. **预热**：向进程池提交一个 dummy 任务触发子进程内 InsightFace 加载；主进程同步加载 ArcFace
+7. yield → 服务对外可用
+8. 关闭：Redis close + 进程池 shutdown
 
 效果：首次识别请求从 10-15s 降到 2-3s（提升 70-80%）。
+
+> **`init_database` 的不变量（铁律）**：
+> - **幂等**：第 N 次启动 = 第 1 次启动，结果完全相同
+> - **只增不减**：只 `create_index`，绝不 `drop`/`delete` 任何业务数据
+> - **失败容忍**：单步失败仅打日志，不抛异常
+> - **零写业务数据**：`persons` / `api_call_logs` 等业务集合永远不会被写入
 
 ### 7. 特征向量管理
 
@@ -571,6 +582,11 @@ max_feature_image_size_m = 10            # 文件大小上限 (MB)
 max_face_hw = 999
 min_face_hw = 50
 
+# ====== 媒体持久化（人脸裁剪图） ======
+[media]
+is_persistence = false                   # 默认 false: 录入接口不写盘 photo_path 留空(纯后端 API)
+                                         # true:  录入接口写入 media/person_photos/ Web UI 头像才能展示
+
 # ====== 日志 ======
 [logger]
 level = "INFO"                           # DEBUG / INFO / WARNING / ERROR
@@ -612,6 +628,7 @@ refresh_on_update = true                 # 增/改/删时同步刷新
 | `image.min_feature_image_width/height_px` | 80 | 影响 `base64_to_mat` 像素总数下限（80×80=6400） |
 | `redis.cache.embeddings_ttl` | 0 | 人物库变化频繁可改为 300-3600；变化少建议永不过期 |
 | `db.limit` | 5000 | 万级人物库可调至 50000；十万级建议接 Faiss/Milvus |
+| `media.is_persistence` | false | 纯后端 API 部署保持 false；启用 Web UI 头像展示时改 true |
 
 ---
 
@@ -631,11 +648,19 @@ refresh_on_update = true                 # 增/改/删时同步刷新
 }
 ```
 
-**索引建议**（部署时手动创建，代码未自动建）：
+**索引清单**（**v3.1 起由 `init_database` 在 lifespan 启动期自动创建，无需手动**）：
+
+| 索引名 | 字段 | 类型 | 来源 |
+|---|---|---|---|
+| `_id_` | `_id` | 唯一 | MongoDB 默认 |
+| `idx_number_unique` | `number` | **唯一** | `app/core/db_init.py::ensure_persons_indexes` |
+| `idx_name` | `name` | 普通 | 同上 |
+
+历史脏数据（`number` 重复）会导致唯一索引建立失败，此时代码自动降级为普通索引 + WARNING 日志，需要运维清理后执行：
 
 ```javascript
-db.persons.createIndex({ "number": 1 }, { unique: true })
-db.persons.createIndex({ "name": 1 })
+db.persons.dropIndex("idx_number")          // 删除降级后的普通索引
+// 重启服务,init_database 会重建唯一索引
 ```
 
 ### 2. `api_call_logs` 集合（请求明细）
@@ -739,12 +764,12 @@ app/ai_models/
 ### 3. 配置数据库与 Redis
 
 ```bash
-# MongoDB
+# MongoDB —— 仅需创建用户（索引由服务启动时自动创建）
 systemctl start mongod
 mongo
-> use facerecapi
-> db.createUser({user:"root", pwd:"root", roles:[{role:"readWrite", db:"facerecapi"}]})
-> db.persons.createIndex({number:1}, {unique:true})
+> use admin
+> db.createUser({user:"root", pwd:"root", roles:[{role:"root"}]})
+# persons.number / persons.name 索引由 init_database() 自启动时幂等创建,无需手动
 
 # Redis
 systemctl start redis
@@ -789,6 +814,10 @@ PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 \
 
 ```
 ✅ MongoDB ping ok
+[DBInit] 开始数据库初始化...
+[DBInit] persons.number 唯一索引已就绪
+[DBInit] persons.name 索引已就绪
+[DBInit] 数据库初始化完成
 ✅ Redis 连接成功
 ✅ 启动时已加载 XXX 个人员特征到 Redis
 正在初始化 Dlib 进程池，工作线程数: 1...
@@ -799,6 +828,7 @@ PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 \
 🔄 预加载 Embedding 模型 (ArcFace)...
 ✅ Embedding 模型已预加载到 GPU
 ✅ AI 模型预加载完成
+[/persons] 人脸图持久化开关 is_persistence=False
 Uvicorn running on http://0.0.0.0:8003
 ```
 
