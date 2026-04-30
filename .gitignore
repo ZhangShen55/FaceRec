@@ -24,6 +24,7 @@ media/person_photos/
 media/detections/
 
 # AI Models
+*.onnx
 ai_models/*.onnx
 ai_models/*/*.onnx
 ai_models/*.dat
