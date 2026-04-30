@@ -83,7 +83,7 @@ services:
       context: ..                                # 构建上下文 = app/ 目录
       dockerfile: docker/Dockerfile
     image: ${FACERECAPI_IMAGE:-jy-algorithm-app-facerec-service}:${FACERECAPI_TAG:-v1.0.0_0430}
-    # image: jy-algorithm-app-facerec-service:v1.0.0_0429
+    # image: jy-algorithm-app-facerec-service:v1.0.0_0429 
     container_name: facerecapi
     restart: unless-stopped
     depends_on:
@@ -99,6 +99,7 @@ services:
       - /data/facerecapi/media:/srv/app/media
       - /data/facerecapi/logs:/srv/app/logs
     environment:
+    # 多卡：NVIDIA_VISIBLE_DEVICES=0,1,2,3 单卡：NVIDIA_VISIBLE_DEVICES=0
       - NVIDIA_VISIBLE_DEVICES=0
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     # Compose V2 会将下方 devices 转换为 Docker GPU DeviceRequest。
@@ -108,7 +109,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 1 # 多卡：count: 4 单卡：count: 1
               capabilities: [gpu]
     networks:
       - facerec-net
