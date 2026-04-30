@@ -1,24 +1,108 @@
-version: '3.8'
+# =============================================================================
+# FaceRecAPI 一键部署编排（mongo7 + redis + facerecapi 全栈）
+#
+# 部署流程（目标服务器）：
+#   1) 导入 3 个镜像
+#        docker load -i mongo-7.0.12-jammy.tar
+#        docker load -i redis-7-alpine.tar
+#        docker load -i jy-algorithm-app-facerec-service*.tar
+#   2) 初始化宿主机目录与配置
+#        sudo bash app/scripts/init_host.sh
+#   3) 拷贝模型到 /data/facerecapi/ai_models/
+#   4) （可选）按需修改 /data/facerecapi/config.toml
+#   5) 一键拉起
+#        cd app/docker && docker compose up -d
+# =============================================================================
+
+name: facerecapi
 
 services:
-  facerecapi:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: facerecapi
+
+  # ---------------------------------------------------------------------------
+  # MongoDB —— 持久化人物特征向量、API 调用日志、统计数据
+  # 镜像与卷路径与原 docker run 命令完全一致,数据兼容
+  # ---------------------------------------------------------------------------
+  mongo7:
+    image: mongo:7.0.12-jammy
+    container_name: mongo7
     restart: unless-stopped
     ports:
-      - "8000:8000"
-    volumes:
-      - ../config.toml:/app/config.toml:ro
-      - ../logs:/app/logs
-      - ../uploaded_faces:/app/uploaded_faces
-      - ../ai_models:/app/ai_models:ro
+      - "27017:27017"
     environment:
-      - WORKERS=4
-      - HOST=0.0.0.0
-      - PORT=8000
-      - LOG_LEVEL=info
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=root
+    volumes:
+      - /data/mongo:/data/db
+    networks:
+      - facerec-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Redis —— 缓存人脸特征向量(Pickle 序列化的 numpy ndarray)
+  # appendonly yes 开启 AOF 持久化,数据落盘到 /data/redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - /data/redis:/data
+    networks:
+      - facerec-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # FaceRecAPI —— 人脸识别后端(GPU)
+  # 业务代码已 Cython 加密为 .so,模型/配置/日志全部 volume 挂载
+  # ---------------------------------------------------------------------------
+  facerecapi:
+    build:
+      context: ..                                # 构建上下文 = app/ 目录
+      dockerfile: docker/Dockerfile
+    image: ${FACERECAPI_IMAGE:-jy-algorithm-app-facerec-service}:${FACERECAPI_TAG:-v1.0.0_0430}
+    # image: jy-algorithm-app-facerec-service:v1.0.0_0429
+    container_name: facerecapi
+    restart: unless-stopped
+    depends_on:
+      mongo7:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+    volumes:
+      - /data/facerecapi/config.toml:/srv/app/config.toml:ro
+      - /data/facerecapi/ai_models:/srv/app/ai_models:ro
+      - /data/facerecapi/media:/srv/app/media
+      - /data/facerecapi/logs:/srv/app/logs
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # Compose V2 会将下方 devices 转换为 Docker GPU DeviceRequest。
+    # 不使用 runtime: nvidia，避免目标机未注册 legacy nvidia runtime 时启动失败。
     deploy:
       resources:
         reservations:
@@ -27,16 +111,19 @@ services:
               count: 1
               capabilities: [gpu]
     networks:
-      - facerecapi-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      - facerec-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
 
+# -----------------------------------------------------------------------------
+# 内部网络:三个容器通过容器名互访
+#   facerecapi → mongo7:27017
+#   facerecapi → redis:6379
+# -----------------------------------------------------------------------------
 networks:
-  facerecapi-network:
+  facerec-net:
+    name: facerec-net
     driver: bridge
-
-# docker-compose up --scale api=N
