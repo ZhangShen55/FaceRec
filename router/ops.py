@@ -3,7 +3,7 @@
 运维管理接口路由
 提供系统监控、统计查询等功能
 """
-from typing import List
+from typing import Annotated, List
 from fastapi import APIRouter, Query, HTTPException
 from datetime import datetime
 import psutil
@@ -109,12 +109,12 @@ async def get_system_metrics():
 
 @router.get("/stats/api-calls", response_model=List[APICallLogResponse])
 async def get_api_call_logs(
-    start_date: str = Query(None, description="开始日期 YYYY-MM-DD"),
-    end_date: str = Query(None, description="结束日期 YYYY-MM-DD"),
-    endpoint: str = Query(None, description="具体接口路径"),
-    method: str = Query(None, description="HTTP 方法"),
-    limit: int = Query(100, description="返回数量", ge=1, le=1000),
-    offset: int = Query(0, description="跳过数量", ge=0)
+    start_date: Annotated[str | None, Query(description="开始日期 YYYY-MM-DD")] = None,
+    end_date: Annotated[str | None, Query(description="结束日期 YYYY-MM-DD")] = None,
+    endpoint: Annotated[str | None, Query(description="具体接口路径")] = None,
+    method: Annotated[str | None, Query(description="HTTP 方法")] = None,
+    limit: Annotated[int, Query(description="返回数量", ge=1, le=1000)] = 100,
+    offset: Annotated[int, Query(description="跳过数量", ge=0)] = 0
 ):
     """
     获取 API 调用详细日志
@@ -141,11 +141,11 @@ async def get_api_call_logs(
 
 @router.get("/stats/hourly", response_model=List[APIStatsHourlyResponse])
 async def get_hourly_stats(
-    start_date: str = Query(None, description="开始日期 YYYY-MM-DD"),
-    end_date: str = Query(None, description="结束日期 YYYY-MM-DD"),
-    endpoint: str = Query(None, description="具体接口路径"),
-    method: str = Query(None, description="HTTP 方法"),
-    limit: int = Query(100, description="返回数量", ge=1, le=1000)
+    start_date: Annotated[str | None, Query(description="开始日期 YYYY-MM-DD")] = None,
+    end_date: Annotated[str | None, Query(description="结束日期 YYYY-MM-DD")] = None,
+    endpoint: Annotated[str | None, Query(description="具体接口路径")] = None,
+    method: Annotated[str | None, Query(description="HTTP 方法")] = None,
+    limit: Annotated[int, Query(description="返回数量", ge=1, le=1000)] = 100
 ):
     """
     获取按小时聚合的 API 统计数据
@@ -171,8 +171,8 @@ async def get_hourly_stats(
 
 @router.get("/stats/summary", response_model=APIStatsSummaryResponse)
 async def get_stats_summary(
-    start_date: str = Query(None, description="开始日期 YYYY-MM-DD，默认7天前"),
-    end_date: str = Query(None, description="结束日期 YYYY-MM-DD，默认今天")
+    start_date: Annotated[str | None, Query(description="开始日期 YYYY-MM-DD，默认7天前")] = None,
+    end_date: Annotated[str | None, Query(description="结束日期 YYYY-MM-DD，默认今天")] = None
 ):
     """
     获取 API 统计汇总信息

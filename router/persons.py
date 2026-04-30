@@ -2,6 +2,7 @@ import uuid
 import cv2
 import numpy as np
 from pathlib import Path
+from typing import Annotated
 from bson.binary import Binary
 from fastapi import APIRouter, HTTPException, Query, Body
 
@@ -455,8 +456,8 @@ async def create_persons_batch_api(
 
 @router.get("", response_model=ApiResponse)
 async def read_persons_api(
-        skip: int = Query(0, description="跳过数据条数"),
-        limit: int = Query(100, description="返回数据条数")
+        skip: Annotated[int, Query(description="跳过数据条数")] = 0,
+        limit: Annotated[int, Query(description="返回数据条数")] = 100
 ):
     """
     获取人物列表接口

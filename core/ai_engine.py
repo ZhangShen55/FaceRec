@@ -56,7 +56,6 @@ def _init_dlib_worker():
         try:
             import insightface
             # 设置 ONNX Runtime 日志级别，减少输出
-            import os
             os.environ.setdefault('ORT_LOGGING_LEVEL', '3')
             insightface_available = True
         except (ImportError, Exception) as e:

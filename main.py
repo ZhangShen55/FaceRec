@@ -41,6 +41,12 @@ logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 MAX_WORKERS = settings.thread.max_workers
 
+
+def _dummy_insightface_warmup():
+    """ProcessPoolExecutor 预热任务：必须是模块顶层函数，才能被 pickle。"""
+    return "InsightFace 已预加载"
+
+
 # ============ 模型预加载函数 ============
 async def _preload_ai_models():
     """
@@ -59,11 +65,6 @@ async def _preload_ai_models():
             # 在线程池中运行 InsightFace 初始化，以避免阻塞主线程
             # InsightFace 会在 _init_dlib_worker 初始化时加载
             # 这里通过向进程池提交一个空任务来触发初始化
-            def _dummy_insightface_warmup():
-                # 这个函数会在已初始化的子进程中运行
-                # 子进程的 _init_dlib_worker 会在创建时就加载 InsightFace
-                return "InsightFace 已预加载"
-
             # 使用 loop 的 run_in_executor 来异步调用
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
