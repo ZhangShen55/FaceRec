@@ -6,6 +6,17 @@ port = "27017"  # 数据库端口
 database = "facerecapi" # 数据库名称
 auth_source = "admin" # 数据库认证源
 limit = 5000 # 限制返回结果条数
+
+[redis]
+host = "localhost"  # Redis 服务器地址
+port = 6379  # Redis 端口
+password = ""  # Redis 密码（如果没有设置密码则留空）
+db = 0  # Redis 数据库编号（0-15）
+max_connections = 500  # 连接池最大连接数
+socket_timeout = 30  # Socket 超时时间（秒）
+socket_connect_timeout = 10  # Socket 连接超时时间（秒）
+decode_responses = false  # 是否自动解码响应为字符串（false 以支持二进制数据如 Pickle）
+
 [face]
 threshold = 0.4 # 人脸识别阈值
 candidate_threshold = 0.2 # 候选人脸阈值
@@ -56,15 +67,7 @@ log_path = "./app/logs/facere_service.log"  # 日志文件路径
 retention_days = 7  # 保留7天的详细日志
 hourly_retention_days = 30  # 保留30天的按小时聚合数据
 
-[redis]
-host = "localhost"  # Redis 服务器地址
-port = 6379  # Redis 端口
-password = ""  # Redis 密码（如果没有设置密码则留空）
-db = 0  # Redis 数据库编号（0-15）
-max_connections = 500  # 连接池最大连接数
-socket_timeout = 30  # Socket 超时时间（秒）
-socket_connect_timeout = 10  # Socket 连接超时时间（秒）
-decode_responses = false  # 是否自动解码响应为字符串（false 以支持二进制数据如 Pickle）
+
 
 [redis.cache]
 # 缓存配置

@@ -54,10 +54,19 @@ RUN pip install --no-build-isolation -r /tmp/requirements.txt
 
 # ------ 编译业务代码 ------
 WORKDIR /build
-# .dockerignore 已排除 ai_models / media / logs / config.toml / tests / docker / 等
+# .dockerignore 排除 media / logs / config.toml / tests / docker / 等；
+# ai_models 保留在构建上下文中，随镜像内置。
 COPY . /build/app/
 
 WORKDIR /build/app
+RUN set -eux; \
+    test -f ai_models/shape_predictor_68_face_landmarks.dat; \
+    test -f ai_models/ms1mv3_arcface_r100.onnx; \
+    test -f ai_models/models/buffalo_l/det_10g.onnx; \
+    test -f ai_models/models/buffalo_l/w600k_r50.onnx; \
+    test -f ai_models/models/buffalo_l/2d106det.onnx; \
+    test -f ai_models/models/buffalo_l/1k3d68.onnx; \
+    test -f ai_models/models/buffalo_l/genderage.onnx
 RUN python build_cython.py build_ext --inplace -j 4 \
     && python clean_after_build.py \
     && rm -f build_cython.py clean_after_build.py \
@@ -66,6 +75,7 @@ RUN python build_cython.py build_ext --inplace -j 4 \
 
 # 此时 /build/app/ 内只剩:
 #   main.py(入口,不编译) + models/(*.py,Pydantic 不编译) + 各业务目录(*.so + __init__.py)
+#   以及随构建上下文复制进来的 ai_models/ 模型文件。
 
 
 # -----------------------------------------------------------------------------
@@ -108,8 +118,16 @@ COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/gunicorn
 WORKDIR /srv
 COPY --from=builder /build/app /srv/app
 
-# 这些目录在容器启动后由 volume 挂载覆盖,先 mkdir 占位避免 import 时报错
-RUN mkdir -p /srv/app/ai_models /srv/app/media/person_photos /srv/app/logs
+# 模型已随镜像复制；media/logs 仍由 volume 挂载，先创建目录作为占位
+RUN mkdir -p /srv/app/media/person_photos /srv/app/logs
+RUN set -eux; \
+    test -f /srv/app/ai_models/shape_predictor_68_face_landmarks.dat; \
+    test -f /srv/app/ai_models/ms1mv3_arcface_r100.onnx; \
+    test -f /srv/app/ai_models/models/buffalo_l/det_10g.onnx; \
+    test -f /srv/app/ai_models/models/buffalo_l/w600k_r50.onnx; \
+    test -f /srv/app/ai_models/models/buffalo_l/2d106det.onnx; \
+    test -f /srv/app/ai_models/models/buffalo_l/1k3d68.onnx; \
+    test -f /srv/app/ai_models/models/buffalo_l/genderage.onnx
 
 EXPOSE 8003
 

@@ -74,10 +74,17 @@ pip install -r app/requirements.txt
 
 ### 3) 准备模型文件
 
-将模型文件放入 `app/ai_models/`：
+将模型文件放入 `app/ai_models/`。v1.3 默认使用 InsightFace `buffalo_l` 检测/对齐，并使用 FastDeploy ArcFace 提取最终特征：
 
 - `shape_predictor_68_face_landmarks.dat`
 - `ms1mv3_arcface_r100.onnx`
+- `models/buffalo_l/det_10g.onnx`
+- `models/buffalo_l/w600k_r50.onnx`
+- `models/buffalo_l/2d106det.onnx`
+- `models/buffalo_l/1k3d68.onnx`
+- `models/buffalo_l/genderage.onnx`
+
+InsightFace 模型必须保持在 `app/ai_models/models/buffalo_l/`。使用 Docker 构建时，整个 `ai_models/` 会随应用镜像打包，不需要在运行时挂载模型目录。
 
 参考：`app/ai_models/README.md`
 

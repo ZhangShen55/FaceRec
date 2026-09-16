@@ -112,17 +112,12 @@ tree -L 3
 
 | 策略 | 优点 | 缺点 |
 |------|------|------|
-| **挂载方式**（推荐） | 镜像小、模型可独立升级 | 需要在宿主机维护模型目录 |
-| **打包到镜像** | 部署即用、无外部依赖 | 镜像体积 +700 MB |
+| **挂载方式** | 镜像小、模型可独立升级 | 需要在宿主机维护模型目录 |
+| **打包到镜像**（当前 Dockerfile） | 部署即用、无需单独复制模型 | 镜像体积 +700 MB，升级模型需重建镜像 |
 
-`docker/docker-compose.yml` 默认采用**只读挂载**：
+当前 `docker/Dockerfile` 会在 builder 阶段把 `ai_models/` 复制进构建产物，runtime 阶段再复制到 `/srv/app/ai_models/`；`docker/docker-compose.yml` 不再挂载模型目录。
 
-```yaml
-volumes:
-  - ../ai_models:/app/ai_models:ro
-```
-
-如果选择打包到镜像，可在 `Dockerfile` 中执行 `COPY ai_models/ /app/ai_models/`。
+构建时会校验 2 个根目录模型和 `models/buffalo_l/` 下的 5 个 ONNX 文件，任一文件缺失都会使镜像构建失败。
 
 ---
 
