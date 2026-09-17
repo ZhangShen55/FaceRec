@@ -18,6 +18,7 @@ RUN sed -i \
     python3.10 \
     python3-pip \
     python3-dev \
+    python3-cairo \
     build-essential \
     cmake \
     libopencv-dev \
