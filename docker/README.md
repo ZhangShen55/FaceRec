@@ -20,7 +20,7 @@ BuildKit layer cache，不使用 `--no-cache`，不执行任何 Docker prune。
 
 ```bash
 DOCKER_BUILDKIT=1 docker build \
-  --build-arg FASTDEPLOY_FIND_LINKS=http://172.17.0.1:18765/facerec-wheel-cache/ \
+  --build-arg FASTDEPLOY_FIND_LINKS=http://172.17.0.1:18765/ \
   --build-arg FASTDEPLOY_TRUSTED_HOST=172.17.0.1 \
   -f docker/Dockerfile \
   -t algorithm-facerec:local \
