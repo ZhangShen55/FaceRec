@@ -32,6 +32,9 @@ tmp/
 docs/
 scripts/
 docker/
+deploy/
+.agents/
+openspec/
 README.md
 agent.md
 .git/

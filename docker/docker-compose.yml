@@ -31,7 +31,7 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=root
       - MONGO_INITDB_ROOT_PASSWORD=root
     volumes:
-      - /data/mongo:/data/db
+      - ${MONGO_DATA_DIR:-/data/mongo}:/data/db
     networks:
       - facerec-network
     healthcheck:
@@ -58,7 +58,7 @@ services:
       - "6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - /data/redis:/data
+      - ${REDIS_DATA_DIR:-/data/redis}:/data
     networks:
       - facerec-network
     healthcheck:
@@ -92,9 +92,9 @@ services:
     ports:
       - "${FACERECAPI_PORT:-8003}:8003"
     volumes:
-      - /data/facerecapi/config.toml:/srv/app/config.toml:ro
-      - /data/facerecapi/media:/srv/app/media
-      - /data/facerecapi/logs:/srv/app/logs
+      - ${FACEREC_CONFIG_FILE:-/data/facerecapi/config.toml}:/srv/app/config.toml:ro
+      - ${FACEREC_MEDIA_DIR:-/data/facerecapi/media}:/srv/app/media
+      - ${FACEREC_LOG_DIR:-/data/facerecapi/logs}:/srv/app/logs
     environment:
       - NVIDIA_VISIBLE_DEVICES=${GPU_DEVICE_ID:-0}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility

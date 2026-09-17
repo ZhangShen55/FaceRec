@@ -34,6 +34,9 @@ tmp/
 *.tmp
 *.bak
 
+# Deployment packages
+deploy/
+
 # OS
 .DS_Store
 

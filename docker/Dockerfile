@@ -31,11 +31,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # pip 索引源策略:
-#   主源     = 阿里云镜像（速度快，国内可达）
-#   备源     = pypi.org   （兜底:阿里云未同步的小众包,如 fastdeploy-tools）
+#   主源     = pypi.org   （包同步完整，当前构建环境下载更稳定）
+#   备源     = 阿里云镜像（国内网络兜底）
 #   wheel 源 = paddlepaddle.org.cn （fastdeploy-gpu-python 1.0.7 专属,在 requirements.txt 内 --find-links）
-ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
-    PIP_EXTRA_INDEX_URL=https://pypi.org/simple \
+ENV PIP_INDEX_URL=https://pypi.org/simple \
+    PIP_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
     PIP_TRUSTED_HOST="mirrors.aliyun.com pypi.org files.pythonhosted.org bj.bcebos.com www.paddlepaddle.org.cn" \
     PIP_DEFAULT_TIMEOUT=180
 
