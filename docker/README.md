@@ -16,6 +16,19 @@ DOCKER_BUILDKIT=1 docker build \
 `.dockerignore` 会排除 `.git`、日志、媒体、测试 cache、部署 tar 和凭据。构建复用默认
 BuildKit layer cache，不使用 `--no-cache`，不执行任何 Docker prune。
 
+使用受控 HTTP 内网缓存提供 FastDeploy wheel 时，同时显式指定可信主机：
+
+```bash
+DOCKER_BUILDKIT=1 docker build \
+  --build-arg FASTDEPLOY_FIND_LINKS=http://172.17.0.1:18765/facerec-wheel-cache/ \
+  --build-arg FASTDEPLOY_TRUSTED_HOST=172.17.0.1 \
+  -f docker/Dockerfile \
+  -t algorithm-facerec:local \
+  .
+```
+
+`FASTDEPLOY_TRUSTED_HOST` 只用于明确受控的 HTTP 缓存；默认 HTTPS wheel 索引不需要该参数。
+
 ## 本地 CPU 容器
 
 准备一个 `gpu.device="cpu"`、`runtime.require_gpu=false` 且可访问 MongoDB 的配置：

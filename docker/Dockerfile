@@ -36,11 +36,18 @@ RUN python3 -m pip install --no-cache-dir \
 COPY requirements.txt /app/
 ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 ARG FASTDEPLOY_FIND_LINKS=https://www.paddlepaddle.org.cn/whl/fastdeploy.html
+ARG FASTDEPLOY_TRUSTED_HOST
 COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 RUN python3 -m pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
+    if [ -n "$FASTDEPLOY_TRUSTED_HOST" ]; then \
+        set -- --trusted-host "$FASTDEPLOY_TRUSTED_HOST"; \
+    else \
+        set --; \
+    fi && \
     python3 -m pip install --no-cache-dir \
         --index-url "$PYPI_INDEX_URL" \
         --find-links "$FASTDEPLOY_FIND_LINKS" \
+        "$@" \
         --timeout 300 \
         --retries 10 \
         --prefer-binary \
