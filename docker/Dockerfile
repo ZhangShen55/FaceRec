@@ -1,6 +1,7 @@
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ubuntu
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -9,7 +10,11 @@ ENV LC_ALL=C.UTF-8
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
+RUN sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|${APT_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${APT_MIRROR}|g" \
+        /etc/apt/sources.list && \
+    apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
     python3-dev \
