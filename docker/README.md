@@ -27,7 +27,9 @@ DOCKER_BUILDKIT=1 docker build \
   .
 ```
 
-`FASTDEPLOY_TRUSTED_HOST` 只用于明确受控的 HTTP 缓存；默认 HTTPS wheel 索引不需要该参数。
+Dockerfile 会先从该 `find-links` 以 `--no-index` 单独安装固定版本的 FastDeploy，
+避免同版本的公网 wheel 覆盖内网缓存。`FASTDEPLOY_TRUSTED_HOST` 只用于明确受控的
+HTTP 缓存；默认 HTTPS wheel 索引不需要该参数。
 
 ## 本地 CPU 容器
 

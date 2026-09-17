@@ -44,6 +44,10 @@ RUN python3 -m pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEE
     else \
         set --; \
     fi && \
+    python3 -m pip install --no-cache-dir --no-index --no-deps \
+        --find-links "$FASTDEPLOY_FIND_LINKS" \
+        "$@" \
+        fastdeploy-gpu-python==1.0.7 && \
     python3 -m pip install --no-cache-dir \
         --index-url "$PYPI_INDEX_URL" \
         --find-links "$FASTDEPLOY_FIND_LINKS" \
