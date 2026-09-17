@@ -1,55 +1,35 @@
-# =============================================================================
-# Docker 构建上下文排除清单（构建上下文 = app/ 目录）
-# 目的：
-#   1) 排除媒体/日志/配置等运行时挂载文件，模型由镜像内置
-#   2) 排除测试/开发/历史代码,减小上下文体积
-#   3) 排除字节码/缓存,加快构建
-# =============================================================================
-
-# ---------- 字节码 / 缓存 ----------
+.git
+.gitignore
+.agents
+.codex
+openspec
+.venv
+venv
+ENV
+env
 **/__pycache__
-**/*.pyc
-**/*.pyo
-**/*.pyd
+**/*.py[cod]
+**/*.so
 **/.pytest_cache
 **/.mypy_cache
-
-# ---------- Cython 中间产物（如果本地有的话） ----------
-**/*.c
-**/*.so
-build/
-
-# ---------- 大体积运行时数据（通过 volume 挂载） ----------
-# ai_models/ intentionally remains in the build context and is packaged into
-# the application image. Only mutable/runtime data stays external.
-media/
-logs/
-config.toml
-
-# ---------- 开发/测试/历史 ----------
-tests/
-tmp/
-docs/
-scripts/
-docker/
-deploy/
-.agents/
-openspec/
+**/.ruff_cache
+tests
+docs
+logs
+media
+tmp
+deploy
+*.tar
+*.log
+.env
+*.pem
+*.key
+*.p12
+*.pfx
+config*.toml
+wheel/*.whl
+!wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 README.md
+AGENTS.md
 agent.md
-.git/
-.gitignore
-.msc
-
-# ---------- 历史 / 备份代码（不放进镜像）----------
-router/faces_backup.py
-
-# ---------- IDE / OS ----------
-.vscode/
-.idea/
 .DS_Store
-Thumbs.db
-
-# ---------- 容器内不需要的辅助脚本（仅本地运行）----------
-# build_cython.py / clean_after_build.py 必须保留(builder 阶段用)
-# 它们不会被 .dockerignore 排除

@@ -1,355 +1,161 @@
-# FaceRecAPI 人脸对比服务
+# FaceRec 人脸识别算子
 
-基于 FastAPI + Dlib + ArcFace(ONNX/FastDeploy) 的人脸对比系统，提供人员库管理、单图识别、多帧识别、运维统计与简单 Web 管理界面。
+FaceRec 使用 InsightFace `buffalo_l` 检测并对齐整图中的多张人脸，使用 FastDeploy
+ArcFace 生成 512 维 embedding，并从 MongoDB 人员库完成匹配。Dlib 68 点检测保留为显式
+可选路径，不作为 InsightFace 失败后的自动回退。
 
-## Git 仓库
+## 运行合同
 
-- https://github.com/ZhangShen55/FaceRec
+- Python 包与唯一入口：`app.main:app`
+- 本地 Conda 环境：`facerecapi`（Python 3.10）
+- 本地端口：`8003`
+- 容器端口：`8000`
+- 根配置：`config.toml`，可由 `CONFIG_PATH` 覆盖
+- 模型目录：项目根 `ai_models/`
+- 可变数据：项目根 `logs/` 与 `media/`
+- 人员事实与 embedding：MongoDB
 
-## 🌟 项目特点
-
-### 核心功能
-- **N:N 多人脸识别** ✨：单张图片可同时检测和识别多张人脸，返回所有人脸的 bbox 和匹配结果
-- **模型启动预加载** ⚡：Unicorn 启动时自动加载 InsightFace + ArcFace 到 GPU，首请求性能提升 **70-80%**
-- **ROI 区域掩膜** 🎯：支持多边形 ROI 掩膜，仅对指定区域内的人脸进行识别
-
-### 技术特性
-- Dlib 68 点关键点检测 + 5 点对齐，提升特征稳定性
-- ArcFace 512 维特征向量，余弦相似度匹配
-- 支持 targets 双阶段匹配（候选阈值 0.2 + 严格阈值 0.4），提高命中率
-- 多帧识别聚合，提高视频流/抓拍稳定性
-- API 统计中间件 + MongoDB TTL 自动清理
-
-### 系统特性
-- 统一的 API 响应格式（HTTP 200 + statusCode 细粒度区分）
-- 完整的错误处理和容错机制
-- 详细的日志记录和性能统计
-- Web 管理界面（HTTP Basic 鉴权）
-
-## 识别流程（/recognize）
-
-### N:N 多人脸识别流程
-
-1. **图片预处理**：Base64 解析 → 像素校验 → ROI 区域掩膜（可选）
-2. **人脸检测**：InsightFace 检测所有人脸（返回多个 bbox）
-3. **人脸对齐与特征提取**：Dlib 68 点对齐 + ArcFace 提取特征向量
-4. **双阶段匹配**：
-   - **阶段 1**：对 targets 列表匹配（阈值 0.2，提高召回率）
-   - **阶段 2**：对全库匹配（阈值 0.4，保证准确率）
-5. **结果聚合**：所有人脸的匹配结果合并去重，按相似度排序
-6. **返回结果**：包含所有检测到的人脸的 bbox + 每个人脸的匹配结果
+FaceRec 不连接平台 Redis。平台注册、心跳和租约均通过 Control Service 完成。算子只处理
+请求中携带的图片，不拉取 RTSP、视频或课程数据。
 
 ## 目录结构
 
-```
-app/
-├── main.py                # FastAPI 入口与生命周期管理
-├── core/                  # 配置、数据库、AI 引擎、日志
-├── router/                # API 路由（faces/persons/ops/web）
-├── services/              # 业务服务层（person/ops/face）
-├── middleware/            # 统计中间件
-├── models/                # 请求/响应模型
-├── utils/                 # 图片解析与校验
-├── ai_models/             # Dlib/ArcFace 模型文件
-├── static/                # Web UI 静态资源
-├── media/                 # 人脸裁剪图保存目录
-├── logs/                  # 日志输出
-└── docs/                  # 详细 API 文档
-```
-
-## 快速开始
-
-### 1) 环境要求
-
-- Python 3.10+
-- MongoDB 4.4+
-- Dlib 编译依赖（cmake, libboost, libopencv）
-- GPU 可选（InsightFace 使用，需要 fastdeploy-gpu-python 或仅 CPU 使用 fastdeploy-python）
-
-### 2) 安装依赖
-
-```bash
-pip install -r app/requirements.txt
+```text
+facerec/
+├── app/                  # FastAPI 应用包
+├── ai_models/            # 七个运行模型，二进制不进入 Git
+├── docker/               # 镜像、入口和独立 Compose
+├── docs/                 # API 与运维补充文档
+├── logs/                 # logs/{instance_id}/application.log
+├── media/                # 可变业务媒体
+├── scripts/              # 宿主机初始化脚本
+├── tests/                # 单元、契约和真实推理 fixture
+├── config.toml
+├── config.example.toml
+└── requirements.txt
 ```
 
-### 3) 准备模型文件
+## 模型
 
-将模型文件放入 `app/ai_models/`。v1.3 默认使用 InsightFace `buffalo_l` 检测/对齐，并使用 FastDeploy ArcFace 提取最终特征：
+运行前必须在项目根准备以下文件，且文件非空：
 
-- `shape_predictor_68_face_landmarks.dat`
-- `ms1mv3_arcface_r100.onnx`
-- `models/buffalo_l/det_10g.onnx`
-- `models/buffalo_l/w600k_r50.onnx`
-- `models/buffalo_l/2d106det.onnx`
-- `models/buffalo_l/1k3d68.onnx`
-- `models/buffalo_l/genderage.onnx`
+```text
+ai_models/
+├── ms1mv3_arcface_r100.onnx
+├── shape_predictor_68_face_landmarks.dat
+└── models/buffalo_l/
+    ├── det_10g.onnx
+    ├── w600k_r50.onnx
+    ├── 2d106det.onnx
+    ├── 1k3d68.onnx
+    └── genderage.onnx
+```
 
-InsightFace 模型必须保持在 `app/ai_models/models/buffalo_l/`。使用 Docker 构建时，整个 `ai_models/` 会随应用镜像打包，不需要在运行时挂载模型目录。
+模型二进制被 Git 忽略。完整说明见 [ai_models/README.md](ai_models/README.md)。无论检测器
+选择 InsightFace 还是 Dlib，最终 embedding 都由 `ms1mv3_arcface_r100.onnx` 生成，以保持
+现有 MongoDB 人员库的特征空间不变。
 
-参考：`app/ai_models/README.md`
+## 配置
 
-### 4) 配置
-
-编辑 `app/config.toml`（按实际环境修改）：
+从 `config.example.toml` 创建部署配置。关键字段如下：
 
 ```toml
-[db]
-username = "root"
-password = "root"
-host = "10.80.5.25"
-port = "27017"
-database = "facerecapi"
-auth_source = "admin"
-limit = 5000
+[face_detection]
+detector = "insightface" # 或 "dlib"
 
-[face]
-threshold = 0.4
-candidate_threshold = 0.2
-rec_min_face_hw = 50
+[face_detection.insightface]
+model_name = "buffalo_l"
+model_path = "ai_models"
+det_size = 320
+det_thresh = 0.75
 
-[threading]
-max_workers = 2
+[gpu]
+device = "cpu" # 或 cuda:N
 
-[frontlogin]
-username = "admin"
-password = "admin"
+[runtime]
+require_gpu = false
+
+[platform]
+registration_enabled = false
+control_service_url = ""
+heartbeat_interval_seconds = 5
+max_concurrent_requests = 128
 
 [image]
-max_feature_image_width_px = 9999
-max_feature_image_height_px = 9999
-min_feature_image_width_px = 80
-min_feature_image_height_px = 80
-max_feature_image_size_m = 10
-max_face_hw = 999
-min_face_hw = 50
-
-[stats]
-retention_days = 7
-hourly_retention_days = 30
+save_person_photo = false
 ```
 
-### 5) 启动服务
+`[gpu].device` 同时控制 InsightFace 与 ArcFace。生产 GPU 配置必须使用 `cuda:N` 并设置
+`runtime.require_gpu=true`；任一后端缺少 CUDA provider、设备越界或初始化失败时，实例不会
+宣告 ready，也不会静默回退 CPU。`threading.max_workers` 是隔离检测进程数，与平台声明容量
+`max_concurrent_requests` 含义独立。
 
-在项目根目录执行（注：首次启动会预加载模型，耗时 15-30 秒）：
+MongoDB 用户名和密码可分别由 `FACEREC_MONGO_USERNAME`、`FACEREC_MONGO_PASSWORD`
+覆盖。启用平台注册时还需设置 `PLATFORM_INSTANCE_ID`、`PLATFORM_SERVICE_URL` 和
+`PLATFORM_OPERATOR_REGISTRY_TOKEN`。
+
+## 本地验证
 
 ```bash
-cd /root/workspace/FaceRecAPI_DEV/app
-PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 \
-uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1
+conda run -n facerecapi python -m compileall -q app
+conda run -n facerecapi python -c "from app.main import app; print(app.title)"
+conda run -n facerecapi python -m pip check
+conda run -n facerecapi python -m pytest -q tests
+conda run -n facerecapi python -m uvicorn app.main:app \
+  --host 127.0.0.1 --port 8003 --workers 1
 ```
 
-**预期启动日志**（模型预加载过程）：
+启动后检查：
 
-```
-✅ MongoDB ping ok
-✅ Redis 连接成功
-✅ 启动时已加载 XXX 个人员特征到 Redis
-正在初始化 Dlib 进程池，工作线程数: 2...
-✅ Dlib 进程池初始化完成
-🔄 预加载 AI 模型到 GPU...
-🔄 预加载 InsightFace 检测模型...
-✅ InsightFace 已预加载
-🔄 预加载 Embedding 模型 (ArcFace)...
-✅ Embedding 模型已预加载到 GPU
-✅ AI 模型预加载完成
-Uvicorn running on http://0.0.0.0:8003
+```bash
+curl http://127.0.0.1:8003/ops/health
+curl http://127.0.0.1:8003/ops/metadata
+curl http://127.0.0.1:8003/ops/status
 ```
 
-**Swagger UI**: `http://localhost:8003/docs`
+`/ops/health` 保持 HTTP 200，通过 `healthy` 或 `degraded` 表达 MongoDB、ArcFace 和检测
+worker 状态。`/ops/metadata` 固定报告 `operator_code=facerec` 与
+`capabilities=["recognize"]`；`/ops/status` 提供 readiness、生命周期、在途请求和声明容量。
 
-### 📊 性能指标（模型预加载后）
+真实本地推理使用 `tests/data/常泽宇.png`。默认 `save_person_photo=false` 时，录入仍会写入
+非空 512 维 embedding，但 `photo_path` 为空且 `media/person_photos/` 不写原图。
 
-| 指标 | 数值 | 说明 |
-|------|------|------|
-| 启动时间 | 15-30 秒 | 包含 MongoDB、Redis、特征缓存加载和模型初始化 |
-| 首次识别请求 | 2-3 秒 | 模型已预加载，相比无预加载的 10-15 秒提升 **70-80%** |
-| 后续请求 | 200-500ms | 常规识别时间 |
-| GPU 显存占用 | 6-9 GB | InsightFace (4-6GB) + ArcFace (2-3GB) |
-| N:N 多人脸 | 支持 | 单张图可检测 5-10+ 张人脸 |
-
-**GPU 兼容性**：
-- RTX 3090 (24GB)：✅ 推荐
-- RTX 4090 (24GB)：✅ 推荐
-- A100 (40GB)：✅ 最佳
-- T4 (16GB)：⚠️ 可用但显存紧张
-
-## API 速览
+## API 兼容边界
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/persons` | 新增或更新人物（按 number 去重） |
-| POST | `/persons/batch` | 批量新增/更新人物 |
-| GET | `/persons` | 人物列表（分页） |
-| POST | `/persons/search` | 搜索人物（name 模糊/number 精确） |
-| DELETE | `/persons/delete` | 通用删除（name/number/id） |
-| POST | `/recognize` | 单图识别 |
-| POST | `/recognize/batch` | 多帧识别并聚合 |
-| GET | `/ops/health` | 健康检查 |
-| GET | `/ops/metrics` | 系统指标 |
-| GET | `/ops/stats/api-calls` | API 调用明细 |
-| GET | `/ops/stats/hourly` | 按小时统计 |
-| GET | `/ops/stats/summary` | 汇总统计 |
-| GET | `/` | Web 管理页（HTTP Basic） |
+| --- | --- | --- |
+| `POST` | `/recognize` | 单图多人脸识别 |
+| `POST` | `/recognize/batch` | 单人多帧聚合识别 |
+| `POST` | `/persons` | 按 `number` 新增或更新人员 |
+| `POST` | `/persons/batch` | 批量新增或更新人员 |
+| `GET` | `/persons` | 分页读取人员 |
+| `POST` | `/persons/search` | 查询人员 |
+| `DELETE` | `/persons/delete` | 删除人员 |
+| `GET` | `/ops/health` | 健康与模型状态 |
+| `GET` | `/ops/metrics` | 系统和应用指标 |
+| `GET` | `/ops/stats/*` | API 统计 |
 
-详细接口文档：
+`POST /recognize` 请求字段保持为 `photo`、`targets`、`threshold`，不接收 `points`/ROI。
+响应继续使用 `status_code`、`has_face`、单个主脸 `bbox` 和按人员编号去重、相似度降序的
+`match`，不得改用上游的驼峰字段或 `bboxs`。
 
-- `app/docs/PERSONS_API.md`
-- `app/docs/RECOGNIZE_API_ERRORS.md`
-- `app/docs/OPS_API.md`
+## 日志与数据
 
-## 请求示例
+日志同时写 stdout 和 `logs/{instance_id}/application.log`，格式为 JSON Lines，默认单文件
+上限 100 MiB，归档保留七天。日志不得包含 Base64、媒体字节、完整请求/响应、凭据、人员
+标识或 embedding。
 
-### 1) 添加人物
+MongoDB 是人员事实与 embedding 的唯一来源。升级不会自动删除、改写或批量重算已有
+embedding；三个平台实例通过共享 MongoDB 观察人员新增、更新与删除，不存在算子侧 Redis
+cache 失效流程。
 
-```json
-POST /persons
-{
-  "name": "张三",
-  "number": "T001",
-  "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-}
-```
+## Docker 与平台部署
 
-### 2) 单图识别
+镜像和独立运行说明见 [docker/README.md](docker/README.md)。正式资产命名固定为：
 
-```json
-POST /recognize
-{
-  "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
-  "targets": ["T001", "T002"],
-  "threshold": 0.4,
-  "points":[
-        {"x":0, "y":0},{"x":1910, "y":0},
-        {"x":1910, "y":540},{"x":0, "y":540}]
-}
-```
+- Git 目录：`facerec/`
+- 镜像 repository：`algorithm-facerec`
+- 实例：`facerec-gpu0`、`facerec-gpu1`、`facerec-gpu2`
 
-**响应示例**（多人脸检测）：
-
-```json
-{
-  "statusCode": 200,
-  "message": "识别成功",
-  "data": {
-    "hasFace": true,
-    "bboxs": [
-      {"x": 100, "y": 120, "w": 150, "h": 150},
-      {"x": 250, "y": 100, "w": 160, "h": 160}
-    ],
-    "threshold": 0.4,
-    "match": [
-      {
-        "id": "507f1f77bcf86cd799439011",
-        "name": "张三",
-        "number": "T001",
-        "similarity": "87.45%",
-        "is_target": true
-      },
-      {
-        "id": "507f1f77bcf86cd799439012",
-        "name": "李四",
-        "number": "T002",
-        "similarity": "82.10%",
-        "is_target": false
-      }
-    ],
-    "message": "检测到2个人脸，匹配成功"
-  }
-}
-```
-
-返回的 `match` 为相似度降序列表，包含 `is_target` 标记。
-`points` 参数用于 ROI 多边形掩膜（可选），仅识别多边形内的人脸。
-
-## 数据存储
-
-### persons 集合
-
-- `_id`: ObjectId
-- `name`: 人物姓名
-- `number`: 唯一编号
-- `photo_path`: 裁剪人脸图片路径
-- `bbox`: 人脸框字符串 `x,y,w,h`
-- `embedding`: 512 维特征向量（Binary, float32 bytes）
-- `tip`: 图像质量提示
-
-### 统计集合
-
-- `api_call_logs`: 详细请求日志（TTL 清理）
-- `api_stats_hourly`: 按小时聚合统计（TTL 清理）
-
-## 📌 说明与注意事项
-
-### 数据格式
-- `photo` 字段必须是 `data:image/...;base64,` 前缀的 Base64 字符串
-- `targets` 为人员编号列表（`number`），匹配分两个阶段：候选阶段阈值 0.2，严格阶段阈值 0.4
-- `points` 参数为 ROI 多边形顶点坐标列表，用于掩膜指定区域（可选）
-
-### 核心功能说明
-
-#### N:N 多人脸识别
-- **特点**：支持单张图片中的多张人脸同时检测和识别
-- **响应**：`bboxs` 字段包含所有检测到的人脸（数组格式），每个人脸都进行匹配
-- **场景**：人群识别、多人通行等
-- **限制**：一般支持 5-10+ 张人脸，具体数量取决于图片分辨率和人脸清晰度
-
-#### 模型启动预加载
-- **工作原理**：系统启动时自动加载 InsightFace 和 ArcFace 到 GPU，无需等待首次请求
-- **性能提升**：首请求从 10-15 秒降低到 2-3 秒（提升 70-80%）
-- **容错机制**：如果预加载失败，系统仍继续启动，首次请求时进行延迟加载
-- **GPU 显存**：占用 6-9 GB（InsightFace 4-6GB + ArcFace 2-3GB）
-
-#### ROI 区域掩膜
-- **功能**：使用多边形顶点定义关注区域，仅识别区域内的人脸
-- **坐标系**：左上角 (0,0)，坐标范围 [0, 图片宽度-1] × [0, 图片高度-1]
-- **顶点要求**：≥3 个点，按顺时针顺序（Top-Left → Top-Right → Bottom-Right → Bottom-Left）
-- **自动功能**：超出边界的坐标自动裁剪到图片范围内
-- **返回值**：`bboxs` 坐标相对于**原始图片**，不是 ROI 区域
-
-### 配置说明
-- Dlib 检测使用进程池，`threading.max_workers` 建议 1~2（防止内存溢出）
-- InsightFace 检测阈值由 `det_thresh` 控制，可在 config.toml 中调整
-- 日志由 `LOG_LEVEL` 与 `LOG_DIR` 环境变量控制，默认写入 `/app/logs/facerecapi.log`
-- Web 管理页 `/` 使用 HTTP Basic 鉴权，账号密码来自 `frontlogin` 配置
-
-### 推荐部署
-
-**开发/测试环境**：
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1 --reload
-```
-
-**生产环境**：
-```bash
-# 后台启动（推荐使用 systemd 或 supervisor）
-cd /root/workspace/FaceRecAPI_DEV/app
-nohup env PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 \
-  uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1 \
-  > logs/facerec_server.log 2>&1 &
-```
-
-### 监控和日志
-- 查看启动日志：`tail -f /root/workspace/FaceRecAPI_DEV/app/logs/facerecapi.log`
-- 监控 GPU：`nvidia-smi` 或 `watch -n 2 nvidia-smi`
-- 健康检查：`curl http://localhost:8003/ops/health`
-- 系统指标：`curl http://localhost:8003/ops/metrics`
-
-### 故障排除
-
-**首次请求仍然很慢**
-- 检查启动日志是否看到 `✅ AI 模型预加载完成`
-- 如果有 `⚠️ AI 模型预加载失败`，说明模型未预加载，首次请求会进行延迟加载
-
-**GPU 显存未增加**
-- 等待启动完成后 30 秒再检查 nvidia-smi
-- 检查 config.toml 中的 gpu_id 是否正确
-- 运行 `nvidia-smi -q` 查看 GPU 详细状态
-
-**识别准确率不理想**
-- 检查图片质量：光线充足、人脸清晰、无遮挡
-- 调整阈值：提高阈值减少误匹配，降低阈值提高召回率
-- 重新录入人员库：确保初始特征高质量
-
-## 联系方式
-
-- 邮箱: seonzheung@gmail.com
+生产平台适配与最终验收在 `192.168.29.11` 完成。构建必须复用并保留 BuildKit cache，
+不得使用 `--no-cache` 或执行 builder/buildx/system prune。
